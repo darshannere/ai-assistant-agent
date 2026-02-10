@@ -43,7 +43,7 @@ export function App() {
             />
               <Route
               path="/draw"
-              element={ <CollaborativeFlow/> }
+              element={ <CollaborativeFlow id={value}/> }
             />
           </Routes>
         </AppShell.Main>

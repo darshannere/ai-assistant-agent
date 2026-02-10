@@ -19,7 +19,8 @@ import json
 import study_problem_sol
 from datetime import datetime, timedelta
 from fastapi_utilities import repeat_every
-
+from google import genai
+from openai import OpenAI
 app = FastAPI()
 
 app.add_middleware(
@@ -129,6 +130,7 @@ class GraphNode:
                     }
                 )
                 editor_manager.profiles[self.claimed_by] = self.name
+                print("claimed by", editor_manager.profiles)
             elif self.claimed_by == id and self.work_status == 1:
                 self.claimed_by = ""
                 self.work_status = 0
@@ -215,6 +217,14 @@ class GraphManager:
                     user_summary[user]["completed"] += node.completed
         return user_summary
 
+class PredictionResponse(BaseModel):
+    prediction: int
+    completed: int
+
+class HelpRequest(BaseModel):
+    helper: str
+    time: int
+    hint: str = "this is hint"
 
 class EditorManager:
     def __init__(self):
@@ -222,6 +232,14 @@ class EditorManager:
         self.individual = {}
         self.profiles = {}
         self.help_queue = []
+        # client = genai.Client(api_key="")
+        # self.client = client
+        client = OpenAI(
+            api_key="",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+        self.client = client
+        # openai.api_key = ""
         self.message_history = [
             {"role": "system", "content": ("Keep all responses 1 sentence long. ")},
             {
@@ -280,6 +298,8 @@ class EditorManager:
                             (average_cook_time, Looping + Function Calling)
 
                             """,
+                
+        
             },
         ]
 
@@ -292,26 +312,42 @@ class EditorManager:
     def update_individual(self, id, state):
         self.individual[id] = state
 
+    def extract_json(text):
+                pattern = r'```json(.*?)```'
+                matches = re.findall(pattern, text, re.DOTALL)
+                return [match.strip() for match in matches]
+
+
     async def send_notification(self, id, task, done, time=0):
         if done:
             response = await self.generate_options_for_new_task(id, task, time)
             res = graph_manager.get_task_summary()
             if len(self.help_queue) == 0:
+                print("no help queue")
+                
+                def extract_json(text):
+                    pattern = r'```json(.*?)```'
+                    matches = re.findall(pattern, text, re.DOTALL)
+                    return [match.strip() for match in matches]
+                
+                opt=extract_json(response)
+
                 event = {
-                    "event": "notification",
+                    "event": "Suggestion",
                     "payload": {
                         "context": f"Great work finishing {task} here are some suggestions for next steps",
                         "help": "doneNoHelp",
-                        "options": json.loads(response).get("options"),
-                        "progress": res,
+                        "options":response,
                     },
                 }
-
+                id = id.replace('"', '')
                 await socketManager.direct_message(id=id, msg=json.dumps(event))
             else:
                 helpee = self.help_queue[0]
+                print("helpee", helpee)
+                # print("sellf.individual", self.individual)
                 prompt2 = f"""Here is {helpee[0]}s code: \n
-                {self.individual[helpee[0]]}"""
+                # {self.individual[helpee[0]]}"""
 
                 # how likely is it that the group will finish at the end of 20
                 # minutes if the person spends 5 minutes helping?
@@ -323,22 +359,43 @@ class EditorManager:
                     estimated_percent_team_can_do_in_{socketManager.total_seconds}_seconds_if_complete,
                   call this field prediction,
                     what_to_focus_to_solve_the_problem call this field focus
+           
                     }}\n"""
-                prompt2 += "Return this an array called options.\n"
+                prompt2 += """Return this an array called options.
+                
+                    ONLY RETURN THIS ARRAY without any \n
+                    "properties": {
+                        "focus": {"type": "string", "description": "A short description of the focus. and hint to solve the problem."},
+                        "individual_disruption": {"type": "number", "description": "Numeric value for individual disruption."},
+                        "prediction": {"type": "number", "description": "Numeric prediction value."}
+                    },
+                """                
+                def extract_json(text):
+                    pattern = r'```json(.*?)```'
+                    matches = re.findall(pattern, text, re.DOTALL)
+                    return [match.strip() for match in matches]
 
-                suggestions = await self.get_ollama_response(prompt2)
+
+
+
+                suggestions = self.get_open_ai_response(prompt2)
+                hel='"'+helpee[0]+'"'
 
                 event = {
                     "event": "notification",
                     "payload": {
-                        "context": f"{helpee[0]} needs {helpee[1]} help with {self.profiles[helpee[0]]}",
+                        "context": f"{helpee[0]} needs {helpee[1]} help with {self.profiles[hel]}",
                         "help": "doneHelp",
-                        "options": json.loads(response).get("options"),
-                        "suggestions": json.loads(suggestions).get("options"),
+                        # "options": json.loads(response).get("options"),
+                        # "options":response,
+                        "suggestions": extract_json(suggestions),
                         "percentDone": graph_manager.percent_done(),
                     },
                 }
+                id = id.replace('"', ''); 
                 await socketManager.direct_message(id=id, msg=json.dumps(event))
+                print("sent",id)
+        
         else:
             event = {
                 "event": "notification",
@@ -355,8 +412,23 @@ class EditorManager:
                     "progress": graph_manager.get_task_summary(),
                 },
             }
+            print("Seding help notification", event)
             await socketManager.direct_message(id=id, msg=json.dumps(event))
 
+    def get_open_ai_response(self, prompt=""):
+        self.message_history.append({"role": "user", "content": prompt})
+        response= self.client.chat.completions.create(
+            model="gemini-2.0-flash",
+            messages=self.message_history,
+            temperature=0,
+            max_tokens=1500,
+        )
+        asisntant_response = response.choices[0].message
+        self.message_history.append(asisntant_response)
+        # print(asisntant_response)
+        return asisntant_response.content
+          
+        
     async def get_ollama_response(self, prompt=""):
         api_url = "http://prime-lab.cs.vt.edu:11434/api/chat"
         self.message_history.append({"role": "user", "content": prompt})
@@ -404,7 +476,7 @@ class EditorManager:
             "Only return this array"
         )
 
-        response = await self.get_ollama_response(prompt=prompt)
+        response = self.get_open_ai_response(prompt=prompt)
         return response
 
     async def get_prediction_data(self, id: str, min: str):
@@ -472,7 +544,7 @@ class FunctionReplacer:
 
         is_failed = False
         failure_lines = []
-
+        print(lines)
         for line in lines:
             stripped = line.strip()
             if "::" in stripped and ("PASSED" in stripped or "FAILED" in stripped):
@@ -503,15 +575,13 @@ class FunctionReplacer:
 
     async def run_tests(self, user):
         try:
-            print("Running test cases...")
             test_cases = ""
             if not self.test_full:
                 parts = re.split(r"_", self.function_name, maxsplit=2)
                 test_cases = f"{parts[0]}_{parts[1]}"
-                print(f"test_{test_cases}")
 
             if graph_manager.graph[self.function_name].work_status == 2:
-                print("Already complete")
+                print(f"{self.function_name} Already complete")
                 return
 
             result = subprocess.run(
@@ -519,37 +589,55 @@ class FunctionReplacer:
                     sys.executable,
                     "-m",
                     "pytest",
-                    "-vv",
+                    "-v",
+                    "--disable-warnings",
                     "test_study_problem.py",
                     "-k",
                     test_cases,
-                    "--color=no",
+                    "--color=yes",
                     # "--tb=short",
                     # "-q",
                 ],
                 capture_output=True,
                 text=True,
             )
+            # def sanitize_line(line):
+            #     if re.match(r"^[=]{3,}", line):
+            #         return '=== FAILURES ==='
+            #     if re.match(r"^[_]{3,}", line):
+            #         return '___ TEST SECTION ___'
+            #     return line
 
+            # raw_lines = result.stdout.splitlines()
+            # clean_lines = [sanitize_line(ln) for ln in raw_lines]
+
+            # # Print sanitized output preserving newlines
+            # print("\n".join(clean_lines))
+            print(result.stdout)           
             if not self.test_full:
                 match = re.search(
                     r"=+ (\d+) passed.*(?:, (\d+) failed)?", result.stdout
                 )
                 passed = int(match.group(1)) if match else 0
-
+                passed_match = re.search(r"(\d+)\s+passed", result.stdout)
+                pass_final= int(passed_match.group(1)) if passed_match else 0
+                
                 selected_match = re.search(
                     r"collected (\d+) items / (\d+) deselected / (\d+) selected",
                     result.stdout,
                 )
                 total_selected = int(selected_match.group(3)) if selected_match else 0
-
                 await graph_manager.update_completed(
                     node_id=self.function_name,
-                    completed=passed,
+                    completed=pass_final,
                     remaining=total_selected,
                 )
-            test = self.parse_pytest_output(result.stdout)
-            print(test)
+                print(
+                    f"Completed {pass_final} out of {total_selected} tests for {self.function_name}"
+      
+                )
+            # test = self.parse_pytest_output(result.stdout)
+            # print(test)
             # print(result.stderr)
         except Exception as e:
             print("Error running tests:", e)
@@ -557,7 +645,7 @@ class FunctionReplacer:
     def restore_main_file(self):
         with open(self.main_copy_file, "r") as src, open(self.main_file, "w") as dest:
             dest.write(src.read())
-        print(f"Restored {self.main_file} to its original state")
+        # print(f"Restored {self.main_file} to its original state")
 
 
 socketManager = SocketManager()
@@ -605,7 +693,10 @@ def stop_timer(request: Request):
 
 
 @app.post("/StartHelpSession")
-async def start_help_session(helper: str, time: int, hint: str = "this is hint"):
+async def start_help_session(body: HelpRequest):
+    helper=body.helper
+    time=body.time
+    hint=body.hint
     connected_ids = {
         conn.id for conn in socketManager.connections if conn.id != "control"
     }
@@ -617,7 +708,7 @@ async def start_help_session(helper: str, time: int, hint: str = "this is hint")
             "payload": {
                 "helpee": helpee,
                 "helper": helper,
-                "time": time * 1000 * 60,
+                "time": time * 60,
                 "hint": hint,
             },
         }
@@ -625,6 +716,7 @@ async def start_help_session(helper: str, time: int, hint: str = "this is hint")
         print("Starting help session between helpee ", helpee, "and helper ", helper)
         print(event)
         editor_manager.help_queue.pop()
+        print(editor_manager.help_queue)
         return {"status": "success"}
 
     else:
@@ -656,8 +748,8 @@ def view_menu(menu: Menu):
             {"role": "user", "content": "P working on create_order"}
         )
         editor_manager.help_queue.append(("P", "quick"))
-    else:
-        editor_manager.help_queue = []
+    # else:
+        # editor_manager.help_queue = []
     await editor_manager.send_notification(id, task, done)
 
 
@@ -759,6 +851,7 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                 await socketManager.broadcast(json.dumps(event))
 
             if loaded["event"] == "updatePlayground":
+                print("updating playground", editor_manager.individual, loaded)
                 editor_manager.update_individual(id, loaded["payload"]["doc"])
                 event = {
                     "event": "monitorPlayground",
@@ -850,12 +943,21 @@ async def reply_to_help(body: ReplyBody):
         helpType = "quick"
     elif body.choice == "I am fully stuck 🆘":
         helpType = "a lot of"
-
     else:
         helpType = "none"
 
-    if helpType != "none" and body.id not in editor_manager.help_queue:
-        editor_manager.help_queue.append((body.id, helpType))
+    if helpType != "none":
+        # Check if id is already in the queue
+        for idx, (existing_id, _) in enumerate(editor_manager.help_queue):
+            if existing_id == body.id:
+                # Update the existing entry
+                editor_manager.help_queue[idx] = (body.id, helpType)
+                break
+        else:
+            # ID not found — add new entry
+            editor_manager.help_queue.append((body.id, helpType))
+
+    print("help queue is ", editor_manager.help_queue)
 
 
 @app.post("/helpMe")
@@ -893,5 +995,7 @@ async def ollama(flex: Chat):
     #     flex.chat, flex.task, flex.time
     # )
     # response = editor_manager.completeness_check(flex.chat)
-    response = await editor_manager.get_ollama_response(flex.chat)
+    # response = await editor_manager.get_open_ai_response(flex.chat)
+    response =editor_manager.get_open_ai_response(flex.chat)
+
     return response

@@ -1,257 +1,305 @@
-/* --- Base Modal Styles (can be shared or adapted from previous modal) --- */
-.collab-modal-overlay {
+/* CollaborativeOpportunityModal.css */
+
+
+.modal-overlay {
+  /* For demo, we'll make it part of the page.
+     In a real modal, this would be fixed or absolute to cover the screen. */
     position: fixed;
     left: 0;
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.6); /* Slightly darker overlay */
+    z-index: 1000; 
+    background-color: rgba(0, 0, 0, 0.5); 
     display: flex;
     justify-content: center;
     align-items: center;
-    z-index: 1010; /* Ensure it's above other content */
-  }
-  
-  .collab-modal-content {
-    background-color: #fff; /* White background */
-    color: #333; /* Dark text */
-    padding: 25px 35px;
-    border-radius: 8px;
-    border: 1px solid #ccc; /* Border around the modal */
-    width: 90%;
-    max-width: 750px;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-    position: relative;
-  }
-  
-  .collab-modal-content h1 {
-    margin-top: 0;
-    margin-bottom: 20px;
-    font-size: 1.8em;
-    font-weight: normal;
-    color: #000;
-    border-bottom: 1px solid #eee; /* Light separator */
-    padding-bottom: 15px;
-  }
-  
-  /* --- Section Styles --- */
-  .collab-modal-section {
-    margin-bottom: 25px;
-  }
-  
-  .collab-section-title {
-    font-size: 1.1em;
-    font-weight: bold;
-    color: #444;
-    margin-top: 0;
-    margin-bottom: 8px;
-  }
-  
-  .collab-request-text {
-    font-size: 1em;
-    color: #555;
-    margin-bottom: 0;
-  }
-  
-  
-  /* --- Time Allocation Slider --- */
-  .collab-slider-container {
-    position: relative;
-    padding-top: 15px; /* Space for the value above */
-  }
-  
-  .collab-time-slider {
-    width: 100%;
-    cursor: pointer;
-    height: 8px;
-    background: #ddd; /* Track background */
-    border-radius: 4px;
-    appearance: none; /* Override default look */
-    -webkit-appearance: none;
-  }
-  
-  /* Styling the thumb (the draggable circle) */
-  .collab-time-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    background: #007bff; /* Blue thumb */
-    border-radius: 50%;
-    cursor: pointer;
-    margin-top: -5px; /* Center thumb vertically */
-  }
-  
-  .collab-time-slider::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    background: #007bff;
-    border-radius: 50%;
-    cursor: pointer;
-    border: none;
-  }
-  
-  /* Slider Labels */
-  .collab-slider-labels {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.85em;
-    color: #777;
-    margin-top: 8px;
-    position: relative; /* For positioning markers */
-  }
-  
-  .collab-current-time-marker {
-      position: absolute;
-      transform: translateX(-50%); /* Center the marker */
-      font-weight: bold;
-      color: #333;
-      background-color: #fff;
-      padding: 0 3px;
-      top: -20px; /* Position above the track */
-  }
-  
-  /* Separate display for the current value above the slider */
-  .collab-current-time-display {
-    position: absolute;
-    top: -5px; /* Position it above the slider */
-    left: calc( ( (var(--value, 2) - 1) / (var(--max, 5) - 1) ) * 100% ); /* Calculate position */
-    transform: translateX(-50%); /* Center it */
-    font-size: 0.9em;
-    font-weight: bold;
+
+     /* position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center; */
+  padding: 20px; /* Added for spacing if not using overlay */
+}
+
+.modal-content {
+  background-color: #fff;
+  padding: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 600px; /* Max width of the modal */
+  border: 1px solid #ccc;
+}
+
+.modal-content h2 {
+  margin-top: 0;
+  font-size: 1.8em;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 15px;
+  margin-bottom: 20px;
+}
+
+.modal-content h3 {
+  font-size: 1.1em;
+  margin-top: 0;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.section {
+  margin-bottom: 20px;
+}
+
+.section p {
+  font-size: 0.9em;
+  color: #555;
+  line-height: 1.6;
+}
+
+/* Slider Styles */
+.slider-container {
+  padding: 10px 0;
+}
+
+.slider {
+  width: 100%;
+  cursor: pointer;
+  margin-top: 10px;
+  margin-bottom: 5px;
+  -webkit-appearance: none; /* Override default CSS for Chrome/Safari */
+  appearance: none;
+  height: 8px; /* Slider track height */
+  background: #d3d3d3; /* Track color */
+  outline: none; /* Remove outline */
+  opacity: 0.7; /* Set opacity */
+  -webkit-transition: .2s; /* Transition effects on hover */
+  transition: opacity .2s;
+  border-radius: 5px;
+}
+
+.slider:hover {
+  opacity: 1; /* Fully opaque on hover */
+}
+
+/* Slider Thumb CSS - WebKit (Chrome, Safari, Opera, Edge Chromium) */
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none; /* Override default look */
+  appearance: none;
+  width: 20px; /* Thumb width */
+  height: 20px; /* Thumb height */
+  background: #007bff; /* Thumb color */
+  cursor: pointer; /* Pointer cursor */
+  border-radius: 50%; /* Circular thumb */
+  border: 2px solid #fff;
+  box-shadow: 0 0 2px rgba(0,0,0,0.5);
+}
+
+/* Slider Thumb CSS - Mozilla Firefox */
+.slider::-moz-range-thumb {
+  width: 18px; /* Thumb width */
+  height: 18px; /* Thumb height */
+  background: #007bff; /* Thumb color */
+  cursor: pointer; /* Pointer cursor */
+  border-radius: 50%; /* Circular thumb */
+  border: 2px solid #fff;
+  box-shadow: 0 0 2px rgba(0,0,0,0.5);
+}
+
+
+.slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8em;
+  color: #777;
+}
+.slider-labels span:nth-child(2) { /* Middle label for current value */
+  color: #007bff;
+  font-weight: bold;
+}
+
+
+.slider-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75em;
+  color: #999;
+  padding: 0 5px; /* Small padding to align with slider */
+}
+.slider-ticks .current-tick-value {
     color: #007bff;
-    background: #fff;
-    padding: 1px 4px;
-  }
-  /* Note: Calculating slider value position purely in CSS is tricky without JS updating a CSS variable.
-     The marker above is simpler. The `.collab-current-time-display` requires setting CSS variables
-     --value and --max via JS or inline style if you want it perfectly aligned.
-     The marker example is generally easier. Let's stick with the marker logic shown in the JSX.
-  */
-  
-  
-  /* --- Completion Percent Chart --- */
-  .collab-completion-subtitle {
-    font-size: 0.9em;
-    color: #666;
-    margin-bottom: 10px;
-  }
-  
-  .collab-completion-chart {
-      padding-left: 50px; /* Space for y-axis label */
-      position: relative;
-  }
-  
-  .collab-completion-chart::before { /* Simulate Y-axis Label */
-      content: "Completion %";
-      position: absolute;
-      left: 0;
-      top: 10px; /* Adjust alignment */
-      transform: rotate(-90deg) translateX(-60%); /* Rotate and position */
-      transform-origin: left top;
-      font-size: 0.9em;
-      color: #666;
-      white-space: nowrap;
-  
-  }
-  
-  .collab-completion-bar-container {
-    width: 100%;
-    height: 25px;
-    background-color: #e9ecef; /* Light grey background */
-    border-radius: 4px;
-    overflow: hidden; /* Ensure inner bar stays within bounds */
-    position: relative; /* For text inside */
-  }
-  
-  .collab-completion-bar {
-    height: 100%;
-    background-color: #adb5bd; /* Grey bar color */
-    color: #fff; /* Text color inside bar */
-    display: flex;
-    align-items: center;
-    justify-content: flex-end; /* Align text to the right */
-    padding-right: 10px;
-    font-size: 0.9em;
     font-weight: bold;
-    border-radius: 4px 0 0 4px; /* Slightly rounded left edge */
-    transition: width 0.5s ease-in-out;
-  }
-  
-  /* X-axis Labels */
-  .collab-completion-axis {
+    font-size: 1.1em; /* Make it slightly bigger */
+    position: relative;
+    top: -2px; /* Adjust position */
+}
+
+
+/* Graph Styles */
+.graph-container {
+  display: flex;
+  margin-top: 10px;
+  font-size: 0.8em;
+  height: 150px; /* Adjust as needed */
+  position: relative; /* For legend positioning */
+}
+
+.graph-labels-y {
+  display: flex;
+  flex-direction: column-reverse; /* Start from bottom */
+  justify-content: space-between;
+  padding-right: 10px;
+  height: 100%; /* Take full height of container */
+  box-sizing: border-box;
+  color: #777;
+}
+.graph-labels-y span {
+    flex-grow: 1; /* Distribute space */
     display: flex;
-    justify-content: space-between;
-    font-size: 0.8em;
-    color: #888;
-    margin-top: 5px;
-    padding-right: 15px; /* Align with bar end */
-  }
-  
-  /* Legend */
-  .collab-completion-legend {
-    margin-top: 10px;
-    font-size: 0.85em;
-    color: #555;
+    align-items: flex-start; /* Align text to the top of its allocated space */
+}
+.graph-labels-y span:first-child { /* '0' label */
+    align-items: flex-end; /* Align '0' to the bottom */
+}
+
+
+.graph-bar-area {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+  position: relative; /* For positioning bars */
+  padding-left: 5px; /* Space from Y axis */
+  padding-right: 10px
+}
+
+.bar-wrapper {
+    width: 60%; /* Width of the actual bar area within the graph */
+    height: 100%;
+    position: relative; /* Crucial for absolute positioning of bars */
     display: flex;
-    gap: 15px;
-  }
-  
-  .collab-legend-item {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%; /* Circular legend markers */
-    margin-right: 5px;
-    vertical-align: middle;
-  }
-  .collab-legend-item.prediction { background-color: #adb5bd; } /* Grey */
-  .collab-legend-item.completed { background-color: #007bff; } /* Blue */
-  
-  
-  /* --- Focus Section --- */
-  .collab-focus-section p {
-    background-color: #f8f9fa; /* Very light grey background */
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    padding: 15px;
-    font-size: 0.95em;
-    color: #495057;
-    line-height: 1.5;
-  }
-  
-  /* --- Footer Buttons --- */
-  .collab-modal-footer {
-    margin-top: 20px;
-    padding-top: 20px;
-    border-top: 1px solid #eee; /* Light separator */
-    display: flex;
-    gap: 10px; /* Space between buttons */
-  }
-  
-  .collab-button {
-    flex-grow: 1; /* Make buttons share space */
-    padding: 12px 20px;
-    border: none;
-    border-radius: 5px;
-    font-size: 1em;
-    cursor: pointer;
-    transition: background-color 0.2s ease, opacity 0.2s ease;
-    text-align: center;
-  }
-  
-  .collab-button-help {
-    background-color: #007bff; /* Blue */
-    color: white;
-  }
-  .collab-button-help:hover {
-    background-color: #0056b3;
-  }
-  
-  .collab-button-nohelp {
-    background-color: #6c757d; /* Grey */
-    color: white;
-  }
-  .collab-button-nohelp:hover {
-    background-color: #5a6268;
-  }
+    align-items: flex-end; /* Align bars to the bottom */
+}
+
+.bar {
+  height: 30px; /* Height of the bars */
+  position: absolute; /* Allows overlaying */
+  bottom: 0; /* Align to the bottom of the wrapper */
+  left: 0;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: white;
+  font-size: 0.9em;
+  padding-right: 5px;
+  box-sizing: border-box;
+  transition: width 0.3s ease-in-out;
+}
+
+.prediction-bar {
+  background-color: #d3d3d3; /* Light grey for prediction */
+  z-index: 1;
+}
+
+.completed-bar {
+  background-color: #28a745; /* Green for completed, changed from blue to match image better */
+  z-index: 2; /* Ensure completed bar is on top */
+}
+.bar-value-text {
+    position: absolute;
+    /* right: -30px; Position to the right of the bar */
+    top: 50%;
+    transform: translateY(-50%);
+    color: #333;
+    font-weight: bold;
+    font-size: 0.9em;
+    z-index: 3;
+}
+
+
+.graph-labels-x {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 5px;
+  color: #777;
+  padding-right: calc(40% + 5px); /* Adjust to align with bar wrapper width */
+}
+
+.graph-legend {
+  position: absolute;
+  bottom: -25px; /* Position below X-axis labels */
+  left: 5px;
+  font-size: 0.8em;
+  display: flex;
+  gap: 15px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+}
+
+.legend-color {
+  width: 12px;
+  height: 12px;
+  margin-right: 5px;
+  border-radius: 2px;
+}
+
+.legend-color.prediction {
+  background-color: #d3d3d3;
+}
+
+.legend-color.completed {
+  background-color: #28a745; /* Green */
+}
+
+
+/* Focus Message */
+.focus-message strong {
+  color: #000;
+}
+
+/* Modal Actions */
+.modal-actions {
+  margin-top: 30px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px; /* Space between buttons */
+  border-top: 1px solid #eee;
+  padding-top: 20px;
+}
+
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9em;
+  font-weight: 500;
+}
+
+.btn-primary {
+  background-color: #007bff;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #0056b3;
+}
+
+.btn-secondary {
+  background-color: #6c757d;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: #545b62;
+}

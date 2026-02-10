@@ -1,0 +1,102 @@
+/* HelpSessionStartedModal.css */
+
+/* You can reuse .modal-overlay and .modal-content from your existing CollabModal.css 
+   if they are generic enough, or define them here if they need to be different. */
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #eee;
+  z-index: 1000; /* Ensure it's above other content */
+}
+
+.modal-content.help-session-modal {
+  background:#333;
+  padding: 25px;
+  border-radius: 8px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  width: 90%;
+  max-width: 500px;
+  text-align: left;
+  color: #eee;
+}
+
+.help-session-modal h2 {
+  margin-top: 0;
+  color: #eee;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.help-session-modal .section {
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid #eee;
+  
+}
+.help-session-modal .section:last-of-type {
+  border-bottom: none;
+  margin-bottom: 0; /* Adjust if modal-actions are separate */
+}
+
+
+.help-session-modal .section p {
+  margin: 8px 0;
+  color: #555;
+  line-height: 1.6;
+  color: #eee;
+}
+
+.help-session-modal .section p strong {
+  color: #eee;
+}
+
+.help-session-modal .timer-section {
+  text-align: center;
+  color: #eee;
+}
+
+.help-session-modal .timer-display {
+  font-size: 2.5em; /* Larger timer display */
+  font-weight: bold;
+  margin: 10px 0 15px 0;
+    color: #eee; /* Dark blue-gray */
+}
+
+.help-session-modal .time-up-message {
+  color: #27ae60; /* Green for success/completion */
+  font-weight: bold;
+  margin-top: 10px;
+}
+
+.help-session-modal .modal-actions {
+  margin-top: 25px;
+  display: flex;
+  justify-content: flex-end; /* Aligns button to the right */
+}
+
+/* Basic button styling (adapt to your existing styles) */
+.help-session-modal .btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  margin-left: 10px;
+}
+
+.help-session-modal .btn-secondary {
+  background-color: #7f8c8d; /* Asbestos */
+  color: white;
+}
+
+.help-session-modal .btn-secondary:hover {
+  background-color: #95a5a6; /* Clouds */
+}

@@ -27,7 +27,7 @@ const jumpToFunction = (nodeId) => {
 };
 
 
-const backendServer = '0.0.0.0'; 
+const backendServer = 'localhost'; 
 const animalId = localStorage.getItem("participant-id") || "D"; 
 const storedUserId = animalId.replace(/"/g, '');
 
@@ -105,6 +105,7 @@ const GraphComponent = () => {
     const [nodes, setNodes, onNodesChange] = useNodesState<Node[]>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
     const ws = useRef<WebSocket | null>(null); 
+    const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
     const [tooltipContent, setTooltipContent] = useState<string | null>(null);
     const [tooltipPosition, setTooltipPosition] = useState<{ x: number, y: number } | null>(null);
@@ -143,10 +144,11 @@ const GraphComponent = () => {
         console.log("Layout calculated:", layoutedNodes, layoutedEdges);
 
     }, []);
+    
 
     useEffect(() => {
         if (!ws.current || ws.current.readyState === WebSocket.CLOSED) {
-            const wsUrl = `wss://${backendServer}:8000/ws/${storedUserId}`;
+            const wsUrl = `ws://${backendServer}:8000/ws/${storedUserId}`;
             console.log(`Attempting to connect WebSocket: ${wsUrl}`);
             ws.current = new WebSocket(wsUrl);
 
@@ -244,60 +246,69 @@ const GraphComponent = () => {
     // --- Tooltip / Mouse Hover Handling (Basic Example) ---
     const onNodeMouseEnter = useCallback(async (event, node) => {
         console.log(`Mouse enter node: ${node.id}`);
+        setHoveredNodeId(node.id);
         // Example: Add a temporary class for hover effect
-        setNodes((nds) => nds.map(n => n.id === node.id ? { ...n, className: `${n.className} hovered` } : n));
+        // setNodes((nds) => nds.map(n => n.id === node.id ? { ...n, className: `${n.className} hovered` } : n));
 
-        const nodeW = node.measured?.width || node.style?.width || nodeWidth;
-        const nodeH = node.measured?.height || node.style?.height || nodeHeight;
+        // const nodeW = node.measured?.width || node.style?.width || nodeWidth;
+        // const nodeH = node.measured?.height || node.style?.height || nodeHeight;
 
-        // Project node's graph position (top-left corner) to screen coordinates
-        const nodeScreenPos = reactFlowInstance.flowToScreenPosition({
-            x: node.position.x,
-            y: node.position.y,
-        });
+        // // Project node's graph position (top-left corner) to screen coordinates
+        // const nodeScreenPos = reactFlowInstance.flowToScreenPosition({
+        //     x: node.position.x,
+        //     y: node.position.y,
+        // });
 
-        // Calculate position for tooltip (e.g., centered below the node)
-        const tooltipX = nodeScreenPos.x-10; // Centered horizontally
-        const tooltipY = nodeScreenPos.y  ;  // Positioned below the node with a 5px gap
+        // // Calculate position for tooltip (e.g., centered below the node)
+        // const tooltipX = nodeScreenPos.x-10; // Centered horizontally
+        // const tooltipY = nodeScreenPos.y  ;  // Positioned below the node with a 5px gap
 
-        setTooltipContent('Loading...'); // Show loading state
-        setTooltipPosition({ x: tooltipX, y:node.position.y });
-        setTooltipVisible(true);
+        // setTooltipContent('Loading...'); // Show loading state
+        // setTooltipPosition({ x: tooltipX, y:node.position.y });
+        // setTooltipVisible(true);
 
         // --- Fetch Tooltip Data (Example) ---
-        try {
-            const response = await fetch(`https://${backendServer}:8000/lookup/${node.id}`);
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json();
-            console.log(`Tooltip data for ${node.id}:`, data);
-            if (data.html) {
-                setTooltipContent(data.html);
-                setTooltipVisible(true);
-            } else {
-                 setTooltipContent('No details available.'); 
+        const currentNode = reactFlowInstance.getNode(node.id);
+        if (currentNode ) {
+            setNodes((nds) =>
+                nds.map((n) => n.id === node.id ? { ...n, data: { ...n.data, tooltipHtml: 'Loading...' } } : n)
+            );
+
+            try {
+                const response = await fetch(`http://${backendServer}:8000/lookup/${node.id}`);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                console.log(`Tooltip data for ${node.id}:`, data);
+
+                setNodes((nds) =>
+                    nds.map((n) => {
+                        if (n.id === node.id) {
+                            return { ...n, data: { ...n.data, tooltipHtml: data.html || 'No details available.' } };
+                        }
+                        return n;
+                    })
+                );
+            } catch (error) {
+                console.error(`Failed to fetch tooltip data for ${node.id}:`, error);
+                setNodes((nds) =>
+                    nds.map((n) => {
+                        if (n.id === node.id) {
+                             if (n.data.tooltipHtml === 'Loading...') {
+                                return { ...n, data: { ...n.data, tooltipHtml: 'Error loading details.' } };
+                            }
+                        }
+                        return n;
+                    })
+                );
             }
-
-            
-            // Here you would integrate with your tooltip library to show data.html
-            // e.g., setTooltipContent(data.html); setTooltipTarget(event.target);
-        } catch (error) {
-            console.error(`Failed to fetch tooltip data for ${node.id}:`, error);
-            // Show error in tooltip or console
         }
-        // ---------------------------------------
+    }, [reactFlowInstance, setNodes, setHoveredNodeId]); // Dependencies
 
-    }, [setNodes, setTooltipVisible, setTooltipContent, setTooltipPosition]);
-
-    const onNodeMouseLeave = useCallback((event, node) => {
-        console.log(`Mouse leave node: ${node.id}`);
-        // Remove temporary hover class
-        setNodes((nds) => nds.map(n => n.id === node.id ? { ...n, className: n.className.replace(' hovered', '') } : n));
-        // Hide tooltip using your library's method
-        // e.g., hideTooltip();
-        setTooltipVisible(false);
  
-    }, [setNodes, setTooltipVisible]);
-
+    const onNodeMouseLeave = useCallback((event, node: Node) => {
+        console.log(`Mouse leave node: ${node.id}`);
+        setHoveredNodeId(null); 
+    }, [setHoveredNodeId]); 
 
     // --- Render Component ---
     return (
@@ -328,32 +339,40 @@ const GraphComponent = () => {
                     <div>Graph Status</div>
                     {/* You could display WebSocket connection status here */}
                 </Panel>
+              {/* Render NodeToolbar conditionally for hovered node */}
+              {nodes.map((node) => (
+                    <NodeToolbar
+                        key={node.id} // React key prop
+                        nodeId={node.id}
+                        // Show only when this node is hovered AND tooltip data is not null/loading
+                        isVisible={hoveredNodeId === node.id && node.data.tooltipHtml && node.data.tooltipHtml !== 'Loading...'}
+                        position={Position.Top} // Adjust position (Top, Bottom, Left, Right)
+                        align="center"           // Adjust alignment ('start', 'center', 'end')
+                        offset={10}              // Adjust distance from node edge
+                        className="custom-node-toolbar" // Optional: for CSS styling
+                        style={{
+                            background: 'rgba(0, 0, 0, 0.85)',
+                            color: 'white',
+                            padding: '8px 12px',
+                            borderRadius: '4px',
+                            fontSize: '12px',
+                            fontFamily: 'sans-serif',
+                            maxWidth: '350px',
+                            whiteSpace: 'pre-wrap',
+                            boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+                            zIndex: 1001, 
+                        }}
+                    >
+
+                        {node.data.tooltipHtml && node.data.tooltipHtml !== 'Loading...' && (
+                            <div dangerouslySetInnerHTML={{ __html: node.data.tooltipHtml }} />
+                        )}
+                         {node.data.tooltipHtml === 'Loading...' && (
+                            <div>Loading...</div>
+                        )}
+                    </NodeToolbar>
+                ))}
             </ReactFlow>
-            {tooltipVisible && tooltipPosition&&( <div
-                    style={{
-                        position: 'absolute',
-                        left: tooltipPosition ? tooltipPosition.x : 0, // Offset from cursor
-                        top: tooltipPosition ? tooltipPosition.y : 0,
-                        transform: 'translateX(-50%)',
-                        backgroundColor: 'rgba(0, 0, 0, 0.85)', // Dark background
-                        color: 'white',
-                        padding: '8px 12px',
-                        borderRadius: '4px',
-                        fontSize: '12px',
-                        fontFamily: 'sans-serif',
-                        maxWidth: '350px',
-                        zIndex: 1001, // Ensure high z-index
-                        pointerEvents: 'none', // Important: prevent tooltip from capturing mouse events
-                        whiteSpace: 'pre-wrap', // Respect formatting
-                        boxShadow: '0 2px 5px rgba(0,0,0,0.2)', // Optional shadow
-                        // Smooth transition (optional)
-                        // transition: 'opacity 0.1s ease-in-out',
-                        // opacity: 1, // Start visible (can be used with transition)
-                    }}
-                    // Remember the security warning about dangerouslySetInnerHTML!
-                    // Sanitize data.html if it's not from a fully trusted source.
-                    dangerouslySetInnerHTML={{ __html: tooltipContent || '' }} // Use empty string if content is null
-                />)}
         </div>
     );
 };

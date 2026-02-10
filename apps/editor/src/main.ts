@@ -19,7 +19,7 @@ const animalId = localStorage.getItem('id');
 // TODO: update for wss
 // const ws = new WebSocket(`wss://prime-lab.cs.vt.edu:8000/ws/${animalId}`);
 
-const backendServer = '127.0.0.1';
+const backendServer = '0.0.0.0';
 // prime-lab.cs.vt.edu
 const ws = new WebSocket(`wss://${backendServer}:8000/ws/${animalId}`);
 

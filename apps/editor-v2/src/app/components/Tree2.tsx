@@ -12,11 +12,12 @@ import '@xyflow/react/dist/style.css';
 import './puzzleStyles.css'; 
 const puzzleNodeIds = [
   "Customer", "Restaurant",
-  "view_menu", "create_order", "clear_order",
-  "view_order_summary", "add_to_order", "remove_from_order",
-  "calculate_order_cost", "get_receipt", "inventory_helper",
-  "cook_time_helper", "restock_inventory", "cook_order",
-  "add_to_queue", "average_cook_time"
+  "view_menu", "create_order",  "inventory_helper", "restock_inventory",
+  // "clear_order",
+  // "view_order_summary", "add_to_order", "remove_from_order",
+  // "calculate_order_cost", "get_receipt",
+  // "cook_time_helper", "cook_order",
+  // "add_to_queue", "average_cook_time"
 ];
 import DrawModal from './modals/DrawModeal'; 
 
@@ -24,20 +25,19 @@ const correctLinksSet = new Set(
   [
     { source: "Customer", target: "view_menu" },
     { source: "Customer", target: "create_order" },
-    { source: "Restaurant", target: "inventory_helper" },
-    { source: "Restaurant", target: "restock_inventory" },
-    { source: "Restaurant", target: "cook_time_helper" },
-    { source: "create_order", target: "view_order_summary" },
-    { source: "create_order", target: "calculate_order_cost" },
-    { source: "create_order", target: "clear_order" },
-    { source: "create_order", target: "add_to_queue" },
-    { source: "view_order_summary", target: "get_receipt" },
-    { source: "calculate_order_cost", target: "add_to_order" },
-    { source: "calculate_order_cost", target: "remove_from_order" },
-    { source: "inventory_helper", target: "cook_order" },
-    { source: "cook_time_helper", target: "cook_order" },
-    { source: "add_to_queue", target: "cook_order" },
-    { source: "cook_time_helper", target: "average_cook_time" },
+    // { source: "Restaurant", target: "inventory_helper" },
+    // { source: "Restaurant", target: "restock_inventory" },
+    // { source: "Restaurant", target: "cook_time_helper" },
+    // { source: "create_order", target: "view_order_summary" },
+    // { source: "create_order", target: "calculate_order_cost" },
+    // { source: "create_order", target: "clear_order" },
+    // { source: "create_order", target: "add_to_queue" },
+    // { source: "calculate_order_cost", target: "add_to_order" },
+    // { source: "calculate_order_cost", target: "remove_from_order" },
+    // { source: "inventory_helper", target: "cook_order" },
+    // { source: "cook_time_helper", target: "cook_order" },
+    // { source: "add_to_queue", target: "cook_order" },
+    // { source: "cook_time_helper", target: "average_cook_time" },
   ].map(link => `${link.source}->${link.target}`) 
 );
 
@@ -63,6 +63,7 @@ const correctLinksSet = new Set(
 //     });
 //     return nodes;
 // };
+
 
 
 const initialNodes = [
@@ -107,12 +108,12 @@ export default function PuzzleApp({id}: DrawProps) {
   });
   const allEdges = useMemo(() => [...correctEdges, ...incorrectEdges], [correctEdges, incorrectEdges]);
   const wsRef = useRef<WebSocket | null>(null);
-  const backendServer = "0.0.0.0";
+  const backendServer = "localhost";
   useEffect(() => {
     console.log(id)
     if(id && !wsRef.current) {
       console.log(`Raw value from localStorage: "${id}"`);    
-        const wsUrl = `wss://${backendServer}:8000/ws/${id}`;
+        const wsUrl = `ws://${backendServer}:8000/ws/${id}`;
         console.log("WebSocket URL:", wsUrl);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
@@ -127,6 +128,7 @@ export default function PuzzleApp({id}: DrawProps) {
               console.log("All users have completed the puzzle");
               setTasks(data.payload.draw_states);
               setModalOpen(true);
+              ws.close();
             } else {
               console.log("Someone is remaining to complete the puzzle");
               setTasks(data.payload.draw_states);
@@ -190,12 +192,12 @@ export default function PuzzleApp({id}: DrawProps) {
   const isPuzzleComplete = useMemo(() => correctEdges.length === correctLinksSet.size, [correctEdges]);
   useEffect(() => {
     const sendCompletionStatus = async () => {
-    if (isPuzzleComplete) {
-      console.log("Puzzle complete! Opening modal."); 
+      if (isPuzzleComplete) {
+        console.log("Puzzle complete! Opening modal."); 
         try {
           const completedTime = 0; // Replace with actual time
           const remainingTime = 0; // Replace with actual time
-          const url = `https://${backendServer}:8000/DrawDone?id=${encodeURIComponent(id)}&completed_time=${completedTime}&remaining_time=${remainingTime}`;
+          const url = `http://${backendServer}:8000/DrawDone?id=${encodeURIComponent(id)}&completed_time=${completedTime}&remaining_time=${remainingTime}`;
           const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -212,7 +214,7 @@ export default function PuzzleApp({id}: DrawProps) {
           console.error("Error sending completion status:", error);
         }
         // setModalOpen(true);
-    }
+      }
     };
 
     sendCompletionStatus();
@@ -245,7 +247,6 @@ export default function PuzzleApp({id}: DrawProps) {
           <Background variant="dots" gap={12} size={1} />
         </ReactFlow>
       </div>
-
       <div className="palette-container">
         <h3 className="palette-title">Available Nodes</h3>
         <div className="palette-nodes">
@@ -269,3 +270,4 @@ export default function PuzzleApp({id}: DrawProps) {
     </div>
   );
 }
+

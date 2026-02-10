@@ -37,7 +37,7 @@ export default function Home({setValue}: HomeProps) {
             <Button mt={10}>Goto Editor</Button>
             
           </Link>
-          <Link to="/draw">
+          <Link to="/draw" state={{id:selected}}>
             <Button mt={10}>Goto Draw</Button>
           </Link>
         </Stack>

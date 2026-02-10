@@ -1,5 +1,7 @@
 /* Modal Overlay */
 .modal-overlay {
+  background-color: #333;
+
     position: fixed; /* Sit on top */
     left: 0;
     top: 0;
@@ -14,7 +16,8 @@
   
   /* Modal Content Area */
   .modal-content {
-    background-color: #333; /* Dark background for the modal */
+    background-color: #333;
+     /* Dark background for the modal */
     color: #eee; /* Light text */
     padding: 25px;
     border-radius: 8px;
@@ -29,6 +32,8 @@
     margin-bottom: 20px;
     font-size: 1.4em;
     color: #fff;
+    background-color: #333;
+
     border-bottom: 1px solid #555; /* Separator line */
     padding-bottom: 10px;
   }
@@ -37,6 +42,8 @@
     display: flex;
     gap: 30px; /* Space between columns */
     margin-bottom: 20px;
+    background-color: #333;
+
   }
   
   /* Left Column (Suggestions) */

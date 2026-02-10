@@ -1,48 +1,67 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import './HelpModal.css'; // We'll create this CSS file next
+import { repositionTooltips } from '@uiw/react-codemirror';
 
-function HelpModal({ isOpen, onClose }) {
+function HelpModal({ isOpen, onClose, id }) {
   const [selectedOption, setSelectedOption] = useState(null);
+  const backendServer='localhost'
 
   if (!isOpen) {
     return null; // Don't render the modal if it's not open
   }
-
+ 
   const handleOptionClick = (option) => {
     setSelectedOption(option);
   };
 
   const handleSubmit = () => {
-    console.log("Selected option:", selectedOption);
-    // Add logic here to handle the submission based on selectedOption
+    fetch(`http://${backendServer}:8000/replyToHelp`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ id: id, choice: selectedOption, text: "" }),
+    }).then(response => {
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      return response.json();
+    }
+    ).then(data => {
+      console.log('Help request successful: and sent', data);
+    }).catch(error => {
+      console.error('There was a problem with the help request:', error);
+    });
+
     onClose(); // Close the modal after submission (optional)
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}> {/* Close on overlay click */}
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}> {/* Prevent closing when clicking inside */}
+      <div className="modal-content"  style={{ backgroundColor:"#333"}}onClick={(e) => e.stopPropagation()}> {/* Prevent closing when clicking inside */}
         <h2>Looks like you are stuck! Would you like to ask for help?</h2>
 
         <div className="modal-body">
           <div className="suggestions-column">
             <p className="suggestions-label">Suggestions</p>
             <button
-              className={`suggestion-option ${selectedOption === 'hint' ? 'selected' : ''}`}
-              onClick={() => handleOptionClick('hint')}
+              className={`suggestion-option ${selectedOption === 'Quick Help 💡' ? 'selected' : ''}`}
+              onClick={() => handleOptionClick('Quick Help 💡')}
             >
-              Want to request a Quick hint help from a teammate?💡
+            Quick Help 💡
             </button>
             <button
-              className={`suggestion-option ${selectedOption === 'full' ? 'selected' : ''}`}
-              onClick={() => handleOptionClick('full')}
+              className={`suggestion-option ${selectedOption === 'I am fully stuck 🆘' ? 'selected' : ''}`}
+              onClick={() => handleOptionClick('I am fully stuck 🆘')}
             >
-              Want to request a full help from a teammate?🆘
+            I am fully stuck 🆘
             </button>
             <button
-              className={`suggestion-option ${selectedOption === 'none' ? 'selected' : ''}`}
-              onClick={() => handleOptionClick('none')}
+              className={`suggestion-option ${selectedOption === 'No Help 🚫' ? 'selected' : ''}`}
+              onClick={() => handleOptionClick('No Help 🚫')}
             >
-              Don't want to request help?
+              No Help 🚫
             </button>
           </div>
 

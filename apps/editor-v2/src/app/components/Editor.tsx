@@ -6,6 +6,7 @@ import { useDisclosure } from '@mantine/hooks';
 import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
+import ReactAnsi from "react-ansi";
 import { WebrtcProvider } from 'y-webrtc';
 import Tree from './Tree'
 import { channel } from 'diagnostics_channel';
@@ -13,25 +14,66 @@ import HelpModal from './modals/HelpModal';
 import { useEffect, useState,useRef } from 'react';
 import { cursorTo } from 'readline';
 import { timeStamp } from 'console';
-import CollaborativeOpportunityModal from './modals/CollabModal';
 import GraphComponent from './SMM';
-import { ReactFlowProvider } from '@xyflow/react';
+import { Background, ReactFlowProvider } from '@xyflow/react';
+import { blob } from 'stream/consumers';
+import CollaborativeOpportunityModal from './modals/CollabModal';
+import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
+import { Extension } from "@codemirror/state";
+import {createPersonalEditorUpdateExtension} from './modals/extension';
+import HelpSessionStartedModal from './modals/HelpSessionModal';
 export default function Editor() {
 
-  const [opened, {open, close}] = useDisclosure(false)
+
+  
+  const [opened, {open, close}] = useDisclosure(false) //Tree Modal NOT REQUIRED
   const [helpOpened, { open: openHelp, close: closeHelp }] = useDisclosure(false);
   const [helpOption, setHelpOption] = useState<string | null>(null);
   const [history, setHistory] = useState([]);
   const [personalCode, setPersonalCode] = useState("# Hello world\nprint('hello world')");
-  const backendServer = "0.0.0.0";
+  const backendServer = "localhost";
   const wsRef = useRef<WebSocket | null>(null);
   const id = localStorage.getItem('participant-id') || 'D';
   const storedUserId = id.replace(/"/g, '');
+  const [collabData, setCollabData] = useState([]);
+  const [isCollabModalOpen, setCollabModalOpen] = useState(false);
+  const [context, setContext] = useState("");
+  const[istaskopen,settaskmodalopen]=useState(false);
+  function handleCollabModalOpen() {
+    setCollabModalOpen(true);
+  }
+  function handleCollabModalClose() {
+    setCollabModalOpen(false);
+  }
+  const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python()]);
+    const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
+    const [sessionDetails, setSessionDetails] = useState({
+    totalDurationSeconds: 150,
+    taskContext: '',
+    helperName: ''
+  });
+  const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<[]>([]);
+  const openTModal = () => settaskmodalopen(true);
+  const closeTModal = () => settaskmodalopen(false);
+  function extractJsons(text: string): object[] {
+    const jsonMatches = [...text.matchAll(/```json\n(.*?)\n```/gs)];
+    return jsonMatches.map(match => {
+      try {
+        return JSON.parse(match[1].trim());
+      } catch (error) {
+        console.error("Failed to parse JSON:", match[1]);
+        return null;
+      }
+    }).filter(json => json !== null);
+  }
+  const handleCloseSessionStartedModal = () => {
+    setIsSessionStartedModalOpen(false);
+  };
 
   useEffect(() => {
   if (storedUserId && !wsRef.current) {
     console.log(`Raw value from localStorage: "${storedUserId}"`);    
-      const wsUrl = `wss://${backendServer}:8000/ws/${storedUserId}`;
+      const wsUrl = `ws://${backendServer}:8000/ws/${storedUserId}`;
       console.log("WebSocket URL:", wsUrl);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -46,6 +88,11 @@ export default function Editor() {
         }
         console.log("Sending initial payload:", payload);
         ws.send(JSON.stringify({event:'updateMaster',payload:payload}));
+
+        console.log("Configuring personal editor WebSocket extension for user:", storedUserId);
+        const playgroundUpdateExtension = createPersonalEditorUpdateExtension(ws, storedUserId);
+        setPersonalEditorExtensions([python(), playgroundUpdateExtension]);
+
     };
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -56,6 +103,29 @@ export default function Editor() {
         }
         if (data['event'] === 'initial') {
           ytext.insert(0, data['payload']['doc']);
+        }
+        if(data['event']=='notification'){
+          const context=data['payload']['context']
+          const graphData=data['payload']['suggestions']
+          console.log("Graph data:", graphData);
+          setContext(context);
+          setCollabData(graphData);
+          handleCollabModalOpen();
+
+        }
+        if(data['event']=='StartHelpSession'){
+          if(data['payload']['helper']===storedUserId|| data['payload']['helpee']===storedUserId){
+            const totalDurationSeconds=data['payload']['time']
+            const taskContext= data['payload']['hint']+" please go over to their screen and help them. " 
+            const helperName=data['payload']['heper']
+            setSessionDetails({ totalDurationSeconds, taskContext, helperName });
+            setIsSessionStartedModalOpen(true);
+          }
+        }
+        if(data['event']==='Suggestion'){
+          const taskSuggestions = data['payload']['options'];
+          console.log("Task suggestions:", taskSuggestions);
+          setTaskSuggestionOptions(taskSuggestions['options']);
         }
     }   
       ws.onclose = (event) => { 
@@ -74,6 +144,7 @@ export default function Editor() {
 
     console.log("Cleared code");
   }
+
   async function testCodePlayground() {
     const code = personalCode
     const channel = storedUserId;
@@ -83,7 +154,7 @@ export default function Editor() {
 // IMPLEMENT SPINNER
     // setIconClass("fa-solid fa-spinner");
   
-    await fetch(`https://${backendServer}:8000/testFunction`, {
+    await fetch(`http://${backendServer}:8000/testFunction`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -106,7 +177,7 @@ export default function Editor() {
     const channel=storedUserId;
 
     try {
-      await fetch(`https://${backendServer}:8000/test`, {
+      await fetch(`http://${backendServer}:8000/test`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -131,15 +202,41 @@ export default function Editor() {
 }
 
 
+const helpMe = () => {
+  openHelp();
+  fetch(`http://${backendServer}:8000/helpMe`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ id: id, choice: "Help", text: "" }),
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error('Network response was not ok');
+    }
+    return response.json();
+  })
+  .then(data => {
+    console.log('Help request successful:', data);
+  })
+  .catch(error => {
+    console.error('There was a problem with the help request:', error);
+  });
+};
+
+
+
   return (
     <>
-      <Container fluid h={700}>
-        <PanelGroup direction="horizontal">
-      
-          <Panel defaultSize={30} collapsible={true} collapsedSize={1} minSize={20}>
+      <Container fluid h={"90vh" } p={0}>
           <PanelGroup direction="vertical">
+      
+          <Panel defaultSize={50} minSize={20}>
+          <PanelGroup direction="horizontal">
               {/* --- Original Team Editor Panel --- */}
-              <Panel defaultSize={70} minSize={20}> {/* Adjust defaultSize as needed */}
+              <Panel defaultSize={50} minSize={20}> {/* Adjust defaultSize as needed */}
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc' }}>
                     <Title order={3}>Team Editor</Title>
@@ -160,109 +257,120 @@ export default function Editor() {
               <PanelResizeHandle className={styles.ResizeHandleOuter}>
                  <div className={styles.ResizeHandleInner} style={{backgroundColor: '#eee', height: '5px'}}></div> {/* Basic styling */}
               </PanelResizeHandle>
+                   <Panel defaultSize={50} minSize={20}>
+                  {/* Flex container to manage layout */}
+                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                    {/* Button Group - should not grow or shrink */}
+                    <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
+                      <Title order={3}>Personal Editor</Title>
+                      <Group>
+                        <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
+                        <Button onClick={runPersonalCode} size='compact-xs'>Run</Button>
+                        <Button onClick={clearCode} size='compact-xs'>Clear</Button>
+                        <Button onClick={helpMe} size='compact-xs'>Flag for Help</Button>
+                      </Group>
+                    </Group>
+                    {/* CodeMirror Container - should grow and scroll */}
+                    <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}> {/* Added minHeight: 0 */}
+                      <CodeMirror
+                        height="100%" // Changed from 500px to 100%
+                        value={personalCode}
+                        onChange={(value) => setPersonalCode(value)}
+                        extensions={personalEditorExtensions}
+                        style={{ height: '100%' }} // Ensure CM fills its container
+                      />
+                    </div>
+                  </div>
+                </Panel>
+              </PanelGroup>
+            </Panel>
+        <PanelResizeHandle />
+
               {/* NEW: Panel below Team Editor */}
-              <Panel minSize={20}>
-                <div style={{ padding: '10px' }}>
-                <ReactFlowProvider>
+              <Panel defaultSize={50} minSize={20}>
+              <PanelGroup direction="horizontal">
+       <Panel defaultSize={50}>
+       <div style={{ padding: '10px' }}>
+          <ReactFlowProvider>
 
 <GraphComponent />
 </ReactFlowProvider>
+          </div>
+       </Panel>
+       <PanelResizeHandle />
+        <Panel defaultSize={50}>
+        <div className={styles.Output} id="output">
+        <Title order={3}>Output</Title>
+        <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
+          {history.map(([timestamp, output, isCollaborative], i) => {
+            const HOURS = timestamp.getHours().toString().padStart(2, '0');
+            const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
+            const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
+
+            return (
+              <div key={i}>
+                <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}><ReactAnsi logStyle={{backgroundColor: 'white',color:'black', fontSize: '10px'}} log={output}/></div>
+                  <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
                 </div>
-              </Panel>
-            </PanelGroup>
-
-          </Panel>
-          <PanelResizeHandle className={styles.ResizeHandleOuter}>
-            <div className={styles.ResizeHandleInner}></div>
-          </PanelResizeHandle>
-         
-
-          <Panel minSize={1}>
-            <PanelGroup direction='vertical'>
-              <Panel defaultSize={110} collapsible={true} minSize={20}>
-                <Group align='center'>
-                  <Title order={3}>Personal Editor</Title>
-                  <Group>
-                    <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
-                    <Button onClick={runPersonalCode} size='compact-xs'>Run</Button>
-                    <Button onClick={clearCode} size='compact-xs'>Clear</Button>
-                    <Button size='compact-xs'>Merge</Button>
-                    <Button onClick={openHelp} size='compact-xs'>Flag for Help</Button>
-
-                  </Group>
-                </Group>
-                <CodeMirror 
-                    height="500px" 
-                    value={personalCode}
-                    onChange={(value) => setPersonalCode(value)}
-                    extensions={[python()]} />
-              </Panel>
-              <PanelResizeHandle />
-              <Panel minSize={30}>
-              <div className={styles.Output} id="output">
-              <Title order={3}>Output</Title>
-              <div style={{ overflowY: 'auto', maxHeight: '300px' }}>
-                {history.map(([timestamp, output, isCollaborative], i) => {
-                  const HOURS = timestamp.getHours().toString().padStart(2, '0');
-                  const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
-                  const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
-
-                  return (
-                    <div key={i}>
-                      <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
-                        <p>{output}</p>
-                        <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
-                      </div>
-                      <div
-                        className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}
-                        style={{ color: 'yellow' }}
-                      >
-                        <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
-                      </div>
-                    </div>
-                  );
-                })}
+                <div
+                  className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}
+                  style={{ color: 'yellow' }}
+                >
+                  <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
+                </div>
               </div>
-            </div>
-              </Panel>
-            </PanelGroup>
-          </Panel>
-        </PanelGroup>
-      </Container>
-      <Affix position={{ bottom: 20, right: 20 }}>
-        <Button onClick={open}>
-          Progress Tree
-        </Button>
-      </Affix>
-
-      <Modal size="75%" opened={opened} onClose={close} title="Progress Tree" centered>
-        <div style={{ width: "100%", height: 500 }}>
-          {/* <Tree /> */}
-          <ReactFlowProvider>
-
-          <GraphComponent />
-          </ReactFlowProvider>
-
+            );
+          })}
         </div>
-      </Modal>
-       <HelpModal
-            isOpen={helpOpened}
-            onClose={() => {
-                closeHelp();
-                setHelpOption(null); // Reset on close
-            }}
-            >
+      </div>
+        </Panel>
+      </PanelGroup>
+      </Panel>
+    </PanelGroup>
+    </Container>
 
-            </HelpModal>
+<Modal size="75%" opened={opened} onClose={close} title="Progress Tree" centered>
+  <div style={{ width: "100%", height: 500 }}>
+    {/* <Tree /> */}
+    <ReactFlowProvider>
+
+    <GraphComponent />
+    </ReactFlowProvider>
+
+  </div>
+</Modal>
+{isCollabModalOpen && (<CollaborativeOpportunityModal onClose={handleCollabModalClose} predictions={collabData} context={context} id={storedUserId} />
+)}
+
+
+      {isSessionStartedModalOpen && (
+        <HelpSessionStartedModal
+          isOpen={isSessionStartedModalOpen}
+          onClose={handleCloseSessionStartedModal}
+          totalDurationSeconds={sessionDetails.totalDurationSeconds}
+          taskContext={sessionDetails.taskContext}
+          helperName={sessionDetails.helperName}
+        />
+      )}
+ <HelpModal
+      isOpen={helpOpened}
+      id={storedUserId}
+      onClose={() => {
+          closeHelp();
+          setHelpOption(null);
+      }}
+      >
+
+      </HelpModal>
     </>
   )
 }
-
 // Y.js Collaboration Extension
-
 const ydoc = new Y.Doc();
 const provider = new WebrtcProvider('prime-collab-room-demo', ydoc, {
-  signaling: ['wss://prime-lab.cs.vt.edu:4444'],
+  // signaling: ['wss://prime-lab.cs.vt.edu:4444'],
+    signaling: ['http://localhost:4444'], //this is for local testing
   peerOpts: {
     config: {
       iceServers: [
