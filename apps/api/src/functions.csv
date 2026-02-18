@@ -1,15 +1,19 @@
 Function,Concepts,description,Currently doing,done
 view_menu,"String Interpolation, Looping, Dictionary concepts",Prints the menu items and their cost.,,
-create_order,"Random num generation, Object Initiation, Dictionary Operation",Creates an order with a random 4-digit ID and empty items list.,,
+create_order,"Random num generation, Looping (while loop), Object initialization, Dictionary Operation",Creates an order with a random 4-digit ID and empty items list.,,
 clear_order,"Dictionary Lookup, List Operations",Clears all items in the order and resets cost to zero.,,
-view_order_summary,"Looping, String Interpolation",Displays all items in the order with their cost and the total cost.	,,
-add_to_order,"Conditional Statement(If-else), List concepts, String Interpolation",Adds an item to the order if it exists in the menu; updates the order cost.	,,
-remove_from_order,"Conditional Statement(If-else), List concepts, String Interpolation. Function Calling",Removes an item from the order if it exists; updates the cost.,,
-calculate_order_cost,"Looping, Dictionary concepts",Calculates and returns the total cost of items in the order.	,,
-get_receipt,"String Interpolation, Looping","Prints the receipt, showing customer name, items ordered, and total cost.",,
-add_to_queue,List Operations,Adds an order to the restaurant's order queue.,,
-cook_order,"List Operations, Tuple, Looping, Function calling","Cooks an order from the queue, updates inventory, and returns order ID and cooking time.",,
-restock_inventory,"Conditional Statement(if-else), String Interpolation, Dictionary concepts",Restocks an item in inventory if it exists; else prints a not-found message.,,
-cook_time_helper,Dictionary Operations,Returns the cooking time of a given menu item.,,
+view_order_summary,"Looping, String Interpolation, Function Calling",Displays all items in the order with their cost and the total cost.,,
+add_to_order,"Conditional Statement (If-else), List concepts, String Interpolation, Function Calling",Adds an item to the order if it exists in the menu; updates the order cost.,,
+remove_from_order,"Conditional Statement (If-else), List concepts, String Interpolation, Function Calling",Removes an item from the order if it exists; updates the cost.,,
+calculate_order_cost,"Looping, Dictionary concepts",Calculates and returns the total cost of items in the order.,,
+get_receipt,"String Interpolation, Looping, Function Calling, Dictionary iteration",Prints the receipt, showing customer name, items ordered, and total cost.,,
+add_to_queue,"List Operations, Looping, Dictionary iteration",Adds an order to the restaurant's order queue.,,
+cook_order,"List Operations, Function Calling, Tuple, Looping, Conditional (if-else)",Cooks an order from the queue, updates inventory, and returns order ID and cooking time.,,
+restock_inventory,"Conditional Statement (if-else), String Interpolation, Dictionary concepts",Restocks an item in inventory if it exists; else prints a not-found message.,,
+cook_time_helper,"Dictionary Operations, Conditional",Returns the cooking time of a given menu item.,,
 inventory_helper,"Conditional Statements, Dictionary Operations",Checks if the item is available in inventory and decrements the quantity.,,
-average_cook_time,"Looping, Function Calling",Calculates the average cooking time for all orders in the queue.,,
+average_cook_time,"Looping, Function Calling, String Interpolation",Calculates the average cooking time for all orders in the queue.,,
+
+# Knowledge concept tagging updates:
+# - New concepts added: Dictionary iteration, Conditional.
+# - Fixed column mix-up (get_receipt, add_to_queue); added Function Calling to view_order_summary; deduplicated cook_order.

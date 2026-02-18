@@ -27,9 +27,7 @@ const jumpToFunction = (nodeId) => {
 };
 
 
-const backendServer = 'localhost'; 
-const animalId = localStorage.getItem("participant-id") || "D"; 
-const storedUserId = animalId.replace(/"/g, '');
+const backendServer = 'localhost';
 
 
 // --- Dagre Layout Setup ---
@@ -110,6 +108,10 @@ const GraphComponent = () => {
     const [tooltipContent, setTooltipContent] = useState<string | null>(null);
     const [tooltipPosition, setTooltipPosition] = useState<{ x: number, y: number } | null>(null);
     const [tooltipVisible, setTooltipVisible] = useState<boolean>(false);
+    
+    // Read participant ID fresh on each render
+    const animalId = localStorage.getItem("participant-id") || "D";
+    const storedUserId = animalId.replace(/"/g, '');
 
     useEffect(() => {
         const initialNodes = initialNodeIds.map(id => ({
@@ -193,10 +195,8 @@ const GraphComponent = () => {
                                     return {
                                         ...node,
                                         className: newClassName,
-                                        // You might need to spread data and style if you modify them too
-                                        // data: { ...node.data },
-                                        // style: { ...node.style }
-                                        //ADD DATA OF WHO CLAIMED AND WHEN FINISHED
+                                        data: { ...node.data }, // Preserve tooltip data and other node data
+                                        style: { ...node.style } // Preserve node style
                                     };
                                 }
                                 return node; 
@@ -220,8 +220,8 @@ const GraphComponent = () => {
             // Set ref to null after closing if you have reconnect logic outside this effect
              // ws.current = null;
         };
-        // Add dependencies carefully. If animalId can change, add it here.
-    }, [animalId, setNodes]); // Re-run effect if animalId changes
+        // Add dependencies carefully. If storedUserId can change, add it here.
+    }, [storedUserId, setNodes]); // Re-run effect if storedUserId changes
 
 
     const onNodeClick = useCallback((event, node) => {
@@ -232,7 +232,7 @@ const GraphComponent = () => {
         if (ws.current && ws.current.readyState === WebSocket.OPEN) {
             const message = {
                 event: "updateNode",
-                payload: { node: node.id, id: animalId }
+                payload: { node: node.id, id: storedUserId }
             };
             console.log("Sending WebSocket message:", message);
             ws.current.send(JSON.stringify(message));
@@ -240,7 +240,7 @@ const GraphComponent = () => {
             console.error("WebSocket not open. Cannot send updateNode message.");
             // Optionally queue the message or show an error to the user
         }
-    }, [animalId]); // Include dependencies needed by the handler
+    }, [storedUserId]); // Include dependencies needed by the handler
 
 
     // --- Tooltip / Mouse Hover Handling (Basic Example) ---

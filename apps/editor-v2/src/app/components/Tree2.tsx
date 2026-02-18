@@ -1,12 +1,16 @@
-import React, { useState, useCallback, useMemo,useEffect, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   MiniMap,
   Controls,
   Background,
+  BackgroundVariant,
   useNodesState,
   useEdgesState,
   addEdge,
+  type Edge,
+  type Connection,
+  type EdgeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './puzzleStyles.css'; 
@@ -90,8 +94,8 @@ interface DrawProps{
 export default function PuzzleApp({id}: DrawProps) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [correctEdges, setCorrectEdges, onCorrectEdgesChange] = useEdgesState([]);
-  const [incorrectEdges, setIncorrectEdges, onIncorrectEdgesChange] = useEdgesState<{ source: string; target: string; className?: string }[]>([]);
+  const [correctEdges, setCorrectEdges, onCorrectEdgesChange] = useEdgesState<Edge>([]);
+  const [incorrectEdges, setIncorrectEdges, onIncorrectEdgesChange] = useEdgesState<Edge>([]);
   const [modalOpen, setModalOpen] = useState(false);
 
   const [availableNodes, setAvailableNodes] = useState(initialAvailableNodes);
@@ -136,7 +140,8 @@ export default function PuzzleApp({id}: DrawProps) {
               console.log(data.payload.draw_states);
               console.log("Tasks: ", tasks);
               Object.entries(data.payload.draw_states).forEach(([user, state]) => {
-              console.log(`User ${user} isDone: ${state.isDone}`);
+              const s = state as { isDone?: boolean };
+              console.log(`User ${user} isDone: ${s.isDone}`);
               setModalOpen(true);
 
               });
@@ -154,7 +159,7 @@ export default function PuzzleApp({id}: DrawProps) {
     }
   }, []);
 
-  const addNodeToCanvas = useCallback((nodeIdToAdd) => {
+  const addNodeToCanvas = useCallback((nodeIdToAdd: string) => {
     setAvailableNodes((prev) => prev.filter(id => id !== nodeIdToAdd));
 
 
@@ -170,7 +175,7 @@ export default function PuzzleApp({id}: DrawProps) {
 
 
   const onConnect = useCallback(
-    (params) => {
+    (params: Connection) => {
       const connectionId = `${params.source}->${params.target}`;
       const edgeExists = correctEdges.some(edge => `${edge.source}->${edge.target}` === connectionId) ||
                          incorrectEdges.some(edge => `${edge.source}->${edge.target}` === connectionId);
@@ -185,7 +190,7 @@ export default function PuzzleApp({id}: DrawProps) {
   );
 
    const handleEdgesChange = useCallback(
-      (changes) => { onCorrectEdgesChange(changes); onIncorrectEdgesChange(changes); },
+      (changes: EdgeChange[]) => { onCorrectEdgesChange(changes); onIncorrectEdgesChange(changes); },
       [onCorrectEdgesChange, onIncorrectEdgesChange]
    );
 
@@ -229,7 +234,7 @@ export default function PuzzleApp({id}: DrawProps) {
         <h3 >Complete the following graph</h3>
         {modalOpen && (
   <div className="modal-overlay">
-    <DrawModal setOpenModal={setModalOpen} tasks={tasks} />
+    <DrawModal setOpenModal={setModalOpen} />
   </div>
 )}
       <div className="canvas-container" style={{ height: '500px' }}>
@@ -244,7 +249,7 @@ export default function PuzzleApp({id}: DrawProps) {
         >
           <Controls />
           <MiniMap />
-          <Background variant="dots" gap={12} size={1} />
+          <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
         </ReactFlow>
       </div>
       <div className="palette-container">

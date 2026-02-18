@@ -19,7 +19,7 @@ import json
 import study_problem_sol
 from datetime import datetime, timedelta
 from fastapi_utilities import repeat_every
-from google import genai
+import google.generativeai as genai
 from openai import OpenAI
 app = FastAPI()
 
@@ -46,6 +46,28 @@ class ReplyBody(BaseModel):
     id: str
     choice: str
     text: Optional[str]
+
+
+class ParticipantProfile(BaseModel):
+    id: str
+    name: str
+    photo: str
+    timestamp: int
+
+
+class ProfileManager:
+    def __init__(self):
+        self.profiles: Dict[str, ParticipantProfile] = {}
+    
+    def save_profile(self, profile: ParticipantProfile):
+        self.profiles[profile.id] = profile
+        return profile
+    
+    def get_profile(self, participant_id: str):
+        return self.profiles.get(participant_id)
+    
+    def get_all_profiles(self):
+        return self.profiles
 
 
 class SocketManager:
@@ -173,7 +195,10 @@ class GraphManager:
         with open("functions.csv", newline="") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                self.graph[row["Function"]] = GraphNode(
+                func = row.get("Function", "").strip()
+                if not func or func.startswith("#"):
+                    continue
+                self.graph[func] = GraphNode(
                     name=row["Function"],
                     desc=row["description"],
                     concepts=row["Concepts"],
@@ -381,15 +406,23 @@ class EditorManager:
                 suggestions = self.get_open_ai_response(prompt2)
                 hel='"'+helpee[0]+'"'
 
+                # Fetch helpee's profile information
+                helpee_profile = profile_manager.get_profile(helpee[0])
+                helpee_name = helpee_profile.name if helpee_profile else helpee[0]
+                helpee_photo = helpee_profile.photo if helpee_profile else None
+
                 event = {
                     "event": "notification",
                     "payload": {
-                        "context": f"{helpee[0]} needs {helpee[1]} help with {self.profiles[hel]}",
+                        "context": f"{helpee_name} needs {helpee[1]} help with {self.profiles[hel]}",
                         "help": "doneHelp",
                         # "options": json.loads(response).get("options"),
                         # "options":response,
                         "suggestions": extract_json(suggestions),
                         "percentDone": graph_manager.percent_done(),
+                        "helpeeId": helpee[0],
+                        "helpeeName": helpee_name,
+                        "helpeePhoto": helpee_photo,
                     },
                 }
                 id = id.replace('"', ''); 
@@ -656,6 +689,8 @@ graph_manager = GraphManager()
 
 editor_manager = EditorManager()
 
+profile_manager = ProfileManager()
+
 msgs = []
 state = ""
 cursor_positions = {}
@@ -914,7 +949,18 @@ def lookup_description(node):
         looked_up = graph_manager.graph[node]
         html_str = f"<p>{looked_up.desc}</p><i>{looked_up.concepts}</i>"
         if looked_up.claimed_by != "":
-            html_str += f"<p>Claimed by <b>{looked_up.claimed_by}</b></p>"
+            # Get profile from backend and show avatar
+            profile = profile_manager.get_profile(looked_up.claimed_by)
+            if profile:
+                html_str += f'''<p>Claimed by <b>
+                    <span style="display:inline-flex;align-items:center;gap:6px;">
+                        <img src="{profile.photo}" alt="{profile.name}" 
+                             style="width:20px;height:20px;border-radius:50%;object-fit:cover;border:2px solid #ddd;vertical-align:middle;">
+                        <span>{profile.name}</span>
+                    </span>
+                </b></p>'''
+            else:
+                html_str += f"<p>Claimed by <b>{looked_up.claimed_by}</b></p>"
         if looked_up.total != 0:
             html_str += (
                 f"<p>Progress: <b>{looked_up.completed}/{looked_up.total}</b></p>"
@@ -922,6 +968,28 @@ def lookup_description(node):
 
         return {"html": html_str}
     return {"html": ""}
+
+
+@app.post("/profile")
+def save_profile(profile: ParticipantProfile):
+    """Save participant profile to backend"""
+    profile_manager.save_profile(profile)
+    return {"status": "success", "profile": profile}
+
+
+@app.get("/profile/{participant_id}")
+def get_profile(participant_id: str):
+    """Get participant profile from backend"""
+    profile = profile_manager.get_profile(participant_id)
+    if profile:
+        return {"status": "success", "profile": profile}
+    return {"status": "not_found", "profile": None}
+
+
+@app.get("/profiles")
+def get_all_profiles():
+    """Get all participant profiles"""
+    return {"status": "success", "profiles": profile_manager.get_all_profiles()}
 
 
 @app.post("/reply")

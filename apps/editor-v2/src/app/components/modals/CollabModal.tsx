@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './CollabModal.css'; // Assuming this file exists
 // Removed unused import: import { Background } from '@xyflow/react'; // If not used, it can be removed. Add back if needed.
 
-const CollaborativeOpportunityModal = ({ onClose, predictions, context, id }) => {
+const CollaborativeOpportunityModal = ({ onClose, predictions, context, id, helpeeProfile }) => {
   // Initial mock data (base structure)
   const mockOpportunityData = {
     title: "Collaborative Opportunity!",
@@ -186,6 +186,24 @@ const CollaborativeOpportunityModal = ({ onClose, predictions, context, id }) =>
         <h2>{title}</h2>
         <div className="section">
           <h3>Help Teammate</h3>
+          {helpeeProfile && helpeeProfile.name && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+              {helpeeProfile.photo && (
+                <img 
+                  src={helpeeProfile.photo} 
+                  alt={helpeeProfile.name}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    border: '2px solid #ddd'
+                  }}
+                />
+              )}
+              <strong style={{ fontSize: '18px' }}>{helpeeProfile.name}</strong>
+            </div>
+          )}
           <p>{task.description}</p>
         </div>
 

@@ -38,6 +38,7 @@ export default function Editor() {
   const [collabData, setCollabData] = useState([]);
   const [isCollabModalOpen, setCollabModalOpen] = useState(false);
   const [context, setContext] = useState("");
+  const [helpeeProfile, setHelpeeProfile] = useState({ name: '', photo: null });
   const[istaskopen,settaskmodalopen]=useState(false);
   function handleCollabModalOpen() {
     setCollabModalOpen(true);
@@ -107,9 +108,12 @@ export default function Editor() {
         if(data['event']=='notification'){
           const context=data['payload']['context']
           const graphData=data['payload']['suggestions']
+          const helpeeName = data['payload']['helpeeName'] || ''
+          const helpeePhoto = data['payload']['helpeePhoto'] || null
           console.log("Graph data:", graphData);
           setContext(context);
           setCollabData(graphData);
+          setHelpeeProfile({ name: helpeeName, photo: helpeePhoto });
           handleCollabModalOpen();
 
         }
@@ -340,7 +344,7 @@ const helpMe = () => {
 
   </div>
 </Modal>
-{isCollabModalOpen && (<CollaborativeOpportunityModal onClose={handleCollabModalClose} predictions={collabData} context={context} id={storedUserId} />
+{isCollabModalOpen && (<CollaborativeOpportunityModal onClose={handleCollabModalClose} predictions={collabData} context={context} id={storedUserId} helpeeProfile={helpeeProfile} />
 )}
 
 
