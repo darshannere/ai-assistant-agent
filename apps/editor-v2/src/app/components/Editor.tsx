@@ -1,32 +1,125 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
-import { Button, Title, Container, Affix, Group, Modal } from "@mantine/core"
+import { Button, Title, Container, Group, Modal, Tabs, Badge, Drawer, Text, Code, Divider } from "@mantine/core"
 import { useDisclosure } from '@mantine/hooks';
 import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import ReactAnsi from "react-ansi";
 import { WebrtcProvider } from 'y-webrtc';
-import Tree from './Tree'
-import { channel } from 'diagnostics_channel';
 import HelpModal from './modals/HelpModal';
-import { useEffect, useState,useRef } from 'react';
-import { cursorTo } from 'readline';
-import { timeStamp } from 'console';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import GraphComponent from './SMM';
-import { Background, ReactFlowProvider } from '@xyflow/react';
-import { blob } from 'stream/consumers';
+import { ReactFlowProvider } from '@xyflow/react';
 import CollaborativeOpportunityModal from './modals/CollabModal';
-import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { Extension } from "@codemirror/state";
-import {createPersonalEditorUpdateExtension} from './modals/extension';
+import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
+import { Extension, StateField, EditorState, RangeSetBuilder } from "@codemirror/state";
+import { createPersonalEditorUpdateExtension } from './modals/extension';
 import HelpSessionStartedModal from './modals/HelpSessionModal';
+
+// --- Inline Help Widget (shows "X can help with Y" badge inline in code) ---
+class InlineHelpWidget extends WidgetType {
+  constructor(private readonly text: string) { super(); }
+  toDOM() {
+    const span = document.createElement("span");
+    span.style.marginLeft = "8px";
+    span.style.padding = "2px 8px";
+    span.style.borderRadius = "999px";
+    span.style.background = "#16a34a";
+    span.style.border = "1px solid #15803d";
+    span.style.color = "#ffffff";
+    span.style.fontSize = "11px";
+    span.style.fontWeight = "700";
+    span.style.lineHeight = "1.2";
+    span.style.boxShadow = "0 1px 2px rgba(0, 0, 0, 0.2)";
+    span.style.cursor = "default";
+    span.textContent = this.text;
+    return span;
+  }
+  ignoreEvent() { return true; }
+}
+
+function buildInlineHelpDecoration(state: EditorState, message: string, anchorText: string) {
+  if (!anchorText) return Decoration.none;
+  const doc = state.doc.toString();
+  const anchor = doc.indexOf(anchorText);
+  if (anchor < 0) return Decoration.none;
+  const anchorEnd = anchor + anchorText.length;
+  return Decoration.set([
+    Decoration.widget({
+      widget: new InlineHelpWidget(message),
+      side: 1,
+    }).range(anchorEnd),
+  ]);
+}
+
+function createInlineHelpField(message: string, anchorText: string) {
+  return StateField.define({
+    create(state) { return buildInlineHelpDecoration(state, message, anchorText); },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      return buildInlineHelpDecoration(tr.state, message, anchorText);
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+}
+
+// --- Run Icon Gutter (green play button on def lines) ---
+class RunIconMarker extends GutterMarker {
+  toDOM() {
+    const span = document.createElement("span");
+    span.textContent = "\u25B6";
+    span.style.color = "#22c55e";
+    span.style.fontSize = "20px";
+    span.style.fontWeight = "800";
+    span.style.lineHeight = "1";
+    span.style.display = "inline-flex";
+    span.style.alignItems = "center";
+    span.style.justifyContent = "right";
+    span.style.width = "16px";
+    span.style.cursor = "pointer";
+    span.title = "Test function";
+    return span;
+  }
+}
+
+const runIconMarker = new RunIconMarker();
+
+function buildRunIconMarkers(state: EditorState) {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  for (let lineNo = 1; lineNo <= state.doc.lines; lineNo += 1) {
+    const line = state.doc.line(lineNo);
+    if (/^\s*def\s+\w+\s*\(/.test(line.text)) {
+      builder.add(line.from, line.from, runIconMarker);
+    }
+  }
+  return builder.finish();
+}
+
+const runIconField = StateField.define({
+  create(state) { return buildRunIconMarkers(state); },
+  update(markers, tr) {
+    if (!tr.docChanged) return markers.map(tr.changes);
+    return buildRunIconMarkers(tr.state);
+  },
+});
+
+const runIconGutter = gutter({
+  class: "cm-run-icon-gutter",
+  markers: (view) => view.state.field(runIconField),
+  initialSpacer: () => runIconMarker,
+});
+
+const runIconGutterTheme = EditorView.theme({
+  ".cm-run-icon-gutter": { width: "22px" },
+});
+
+// --- All Participants ---
+const ALL_PARTICIPANTS = ['A', 'B', 'C'];
+
 export default function Editor() {
-
-
-  
-  const [opened, {open, close}] = useDisclosure(false) //Tree Modal NOT REQUIRED
+  const [opened, { open, close }] = useDisclosure(false);
   const [helpOpened, { open: openHelp, close: closeHelp }] = useDisclosure(false);
   const [helpOption, setHelpOption] = useState<string | null>(null);
   const [history, setHistory] = useState([]);
@@ -39,41 +132,147 @@ export default function Editor() {
   const [isCollabModalOpen, setCollabModalOpen] = useState(false);
   const [context, setContext] = useState("");
   const [helpeeProfile, setHelpeeProfile] = useState({ name: '', photo: null });
-  const[istaskopen,settaskmodalopen]=useState(false);
-  function handleCollabModalOpen() {
-    setCollabModalOpen(true);
-  }
-  function handleCollabModalClose() {
-    setCollabModalOpen(false);
-  }
+  const [istaskopen, settaskmodalopen] = useState(false);
+  const [activeTab, setActiveTab] = useState<string | null>('team');
+
+  // Helpee-side state
+  const [helpRequested, setHelpRequested] = useState(false);
+  const [helpSessionActive, setHelpSessionActive] = useState(false);
+  const [helpSessionHelper, setHelpSessionHelper] = useState('');
+  const [helpSessionTimeLeft, setHelpSessionTimeLeft] = useState(0);
+
+  // Helper-side state (when someone else requests help — inline widget)
+  const [incomingHelpRequest, setIncomingHelpRequest] = useState<{
+    helpeeId: string;
+    helpeeName: string;
+    helpeePhoto: string | null;
+  } | null>(null);
+  const [helpCardVisible, setHelpCardVisible] = useState(false);
+
+  // Other participants' personal editor code
+  const [otherEditors, setOtherEditors] = useState<Record<string, string>>({});
+
+  // Inline help extension for the personal editor
+  const [inlineHelpExtension, setInlineHelpExtension] = useState<Extension[]>([]);
+
+  // Proactive helper suggestions (inline widgets in helpee's editor)
+  const [helperSuggestions, setHelperSuggestions] = useState<Array<{
+    helperId: string; helperName: string; helperPhoto: string | null; concepts: string[];
+  }>>([]);
+  const [selectedHelper, setSelectedHelper] = useState<{
+    helperId: string; helperName: string; helperPhoto: string | null; concepts: string[];
+  } | null>(null);
+
+  // Task detail drawer state (LeetCode-style)
+  const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
+  const [selectedTask, setSelectedTask] = useState<{
+    name: string; description: string; concepts: string;
+    example_input: string; example_output: string; starter_code: string;
+  } | null>(null);
+
+  const handleNodeSelect = useCallback(async (nodeId: string) => {
+    // Skip non-function nodes (like "Customer", "Restaurant")
+    if (nodeId === 'Customer' || nodeId === 'Restaurant') return;
+    try {
+      const res = await fetch(`http://${backendServer}:8000/task/${nodeId}`);
+      const data = await res.json();
+      if (data.status === 'ok') {
+        setSelectedTask(data);
+        setPersonalCode(data.starter_code);
+        setTaskDrawerOpen(true);
+      }
+    } catch (e) {
+      console.error('Failed to fetch task details:', e);
+    }
+  }, [backendServer]);
+
+  // Fetch helper suggestions periodically
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      try {
+        const res = await fetch(`http://${backendServer}:8000/helperSuggestions/${storedUserId}`);
+        const data = await res.json();
+        if (data.suggestions && data.suggestions.length > 0) {
+          setHelperSuggestions(data.suggestions);
+          // Build inline help extensions for each suggestion, anchored to `pass` in the code
+          const fields = data.suggestions.map((s: any) =>
+            createInlineHelpField(
+              `${s.helperName} can help with ${s.concepts[0]}`,
+              "pass"
+            )
+          );
+          setInlineHelpExtension(fields);
+        }
+      } catch (e) {
+        // Backend might not be running, silently ignore
+      }
+    };
+    fetchSuggestions();
+    const interval = setInterval(fetchSuggestions, 15000);
+    return () => clearInterval(interval);
+  }, [storedUserId, backendServer]);
+
+  function handleCollabModalOpen() { setCollabModalOpen(true); }
+  function handleCollabModalClose() { setCollabModalOpen(false); }
+
   const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python()]);
-    const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
-    const [sessionDetails, setSessionDetails] = useState({
+  const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
+  const [sessionDetails, setSessionDetails] = useState({
     totalDurationSeconds: 150,
     taskContext: '',
     helperName: ''
   });
   const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<[]>([]);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
   const openTModal = () => settaskmodalopen(true);
   const closeTModal = () => settaskmodalopen(false);
+
+  const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
+
+  // Help session countdown timer (helpee side)
+  useEffect(() => {
+    if (!helpSessionActive || helpSessionTimeLeft <= 0) return;
+    const interval = setInterval(() => {
+      setHelpSessionTimeLeft(prev => {
+        if (prev <= 1) {
+          setHelpSessionActive(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [helpSessionActive, helpSessionTimeLeft]);
+
+  const sendTypingEvent = useCallback((editor: 'team' | 'personal') => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ event: 'typing', payload: { id: storedUserId, editor } }));
+    }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ event: 'stoppedTyping', payload: { id: storedUserId } }));
+      }
+    }, 2000);
+  }, [storedUserId]);
+
   function extractJsons(text: string): object[] {
     const jsonMatches = [...text.matchAll(/```json\n(.*?)\n```/gs)];
     return jsonMatches.map(match => {
-      try {
-        return JSON.parse(match[1].trim());
-      } catch (error) {
-        console.error("Failed to parse JSON:", match[1]);
-        return null;
-      }
+      try { return JSON.parse(match[1].trim()); }
+      catch (error) { console.error("Failed to parse JSON:", match[1]); return null; }
     }).filter(json => json !== null);
   }
+
   const handleCloseSessionStartedModal = () => {
     setIsSessionStartedModalOpen(false);
   };
 
   useEffect(() => {
-  if (storedUserId && !wsRef.current) {
-    console.log(`Raw value from localStorage: "${storedUserId}"`);    
+    if (storedUserId && !wsRef.current) {
+      console.log(`Raw value from localStorage: "${storedUserId}"`);
       const wsUrl = `ws://${backendServer}:8000/ws/${storedUserId}`;
       console.log("WebSocket URL:", wsUrl);
       const ws = new WebSocket(wsUrl);
@@ -81,272 +280,523 @@ export default function Editor() {
 
       ws.onopen = () => {
         console.log("WebSocket connection established");
-        let payload={
+        let payload = {
           cursor: 0,
           doc: ytext.toString(),
           name: storedUserId,
           timeStamp: new Date().getTime(),
         }
         console.log("Sending initial payload:", payload);
-        ws.send(JSON.stringify({event:'updateMaster',payload:payload}));
+        ws.send(JSON.stringify({ event: 'updateMaster', payload: payload }));
 
         console.log("Configuring personal editor WebSocket extension for user:", storedUserId);
         const playgroundUpdateExtension = createPersonalEditorUpdateExtension(ws, storedUserId);
         setPersonalEditorExtensions([python(), playgroundUpdateExtension]);
+      };
 
-    };
-    ws.onmessage = (event) => {
+      ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         console.log("Received message:", data);
         if (data['event'] === 'run') {
-          console.log( data);
+          console.log(data);
           appendToHistory(data['stdout'], data['all']);
         }
         if (data['event'] === 'initial') {
           ytext.insert(0, data['payload']['doc']);
         }
-        if(data['event']=='notification'){
-          const context=data['payload']['context']
-          const graphData=data['payload']['suggestions']
-          const helpeeName = data['payload']['helpeeName'] || ''
-          const helpeePhoto = data['payload']['helpeePhoto'] || null
+        if (data['event'] === 'notification') {
+          const context = data['payload']['context'];
+          const graphData = data['payload']['suggestions'];
+          const helpeeName = data['payload']['helpeeName'] || '';
+          const helpeePhoto = data['payload']['helpeePhoto'] || null;
           console.log("Graph data:", graphData);
           setContext(context);
           setCollabData(graphData);
           setHelpeeProfile({ name: helpeeName, photo: helpeePhoto });
           handleCollabModalOpen();
-
         }
-        if(data['event']=='StartHelpSession'){
-          if(data['payload']['helper']===storedUserId|| data['payload']['helpee']===storedUserId){
-            const totalDurationSeconds=data['payload']['time']
-            const taskContext= data['payload']['hint']+" please go over to their screen and help them. " 
-            const helperName=data['payload']['heper']
+        if (data['event'] === 'StartHelpSession') {
+          const { helper, helpee, time, hint } = data['payload'];
+          if (helper === storedUserId || helpee === storedUserId) {
+            const totalDurationSeconds = time;
+            const taskContext = hint + " please go over to their screen and help them. ";
+            const helperName = helper;
             setSessionDetails({ totalDurationSeconds, taskContext, helperName });
             setIsSessionStartedModalOpen(true);
+
+            // Helpee side: track active help session
+            if (helpee === storedUserId) {
+              setHelpRequested(false);
+              setHelpSessionActive(true);
+              setHelpSessionHelper(helper);
+              setHelpSessionTimeLeft(totalDurationSeconds);
+            }
           }
         }
-        if(data['event']==='Suggestion'){
+        if (data['event'] === 'Suggestion') {
           const taskSuggestions = data['payload']['options'];
           console.log("Task suggestions:", taskSuggestions);
           setTaskSuggestionOptions(taskSuggestions['options']);
         }
-    }   
-      ws.onclose = (event) => { 
-          console.log(`WebSocket connection closed: Code=${event.code}, Reason=${event.reason}, WasClean=${event.wasClean}`);
+        if (data['event'] === 'monitorPlayground') {
+          const editors = data['payload']['editors'] || {};
+          setOtherEditors(editors);
+        }
+        if (data['event'] === 'helpRequest') {
+          const { helpeeId, helpeeName, helpeePhoto } = data['payload'];
+          setIncomingHelpRequest({ helpeeId, helpeeName, helpeePhoto });
+          setHelpCardVisible(true);
+        }
+        if (data['event'] === 'typing') {
+          const { id: tid, editor } = data['payload'];
+          setTypingUsers(prev => ({ ...prev, [tid]: editor }));
+        }
+        if (data['event'] === 'stoppedTyping') {
+          const { id: tid } = data['payload'];
+          setTypingUsers(prev => {
+            const next = { ...prev };
+            delete next[tid];
+            return next;
+          });
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.log(`WebSocket connection closed: Code=${event.code}, Reason=${event.reason}, WasClean=${event.wasClean}`);
       };
 
       ws.onerror = (error) => {
-          console.error("WebSocket specific error event:", error);
+        console.error("WebSocket specific error event:", error);
       };
-
-  }
-}, []); 
+    }
+  }, []);
 
   function clearCode() {
     setHistory([]);
-
     console.log("Cleared code");
   }
 
   async function testCodePlayground() {
-    const code = personalCode
+    const code = personalCode;
     const channel = storedUserId;
-    
-  
-    // const [iconClass, setIconClass] = useState("fa-solid fa-flask");
-// IMPLEMENT SPINNER
-    // setIconClass("fa-solid fa-spinner");
-  
     await fetch(`http://${backendServer}:8000/testFunction`, {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: code, channel: channel }),
     });
-  console.log("testing personal code:", code);
+    console.log("testing personal code:", code);
   }
 
   function mergeCollaborativeCode() {
     const code = ytext.toString();
-    // Implement your merge logic here
-   
-    
     console.log("Merging code:", code);
   }
-  async function runPersonalCode() {
-    const code= personalCode;
-    const channel=storedUserId;
 
+  async function runPersonalCode() {
+    const code = personalCode;
+    const channel = storedUserId;
     try {
       await fetch(`http://${backendServer}:8000/test`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          code: code,channel: channel})});
-          console.log("Running personal code:", code);
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code, channel: channel }),
+      });
+      console.log("Running personal code:", code);
     } catch (e) {
       console.error("Execution error:", e);
     }
-  }  
+  }
+
   function appendToHistory(output, all) {
     setHistory((prev) => [...prev, [new Date(), output, all]]);
   }
 
   function handleHelpSubmit() {
     console.log("Help requested with option:", helpOption);
-    // Add logic here: send request to backend, notify teammates, etc.
-    // Example: sendWebSocketMessage({ event: 'requestHelp', option: helpOption, userId: storedUserId });
-    setHelpOption(null); // Reset selection
-    closeHelp(); // Close the modal
-}
+    setHelpOption(null);
+    closeHelp();
+  }
 
+  const helpMe = () => {
+    setHelpRequested(true);
+    openHelp();
+    fetch(`http://${backendServer}:8000/helpMe`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id, choice: "Help", text: "" }),
+    })
+      .then(response => {
+        if (!response.ok) throw new Error('Network response was not ok');
+        return response.json();
+      })
+      .then(data => console.log('Help request successful:', data))
+      .catch(error => console.error('There was a problem with the help request:', error));
+  };
 
-const helpMe = () => {
-  openHelp();
-  fetch(`http://${backendServer}:8000/helpMe`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ id: id, choice: "Help", text: "" }),
-  })
-  .then(response => {
-    if (!response.ok) {
-      throw new Error('Network response was not ok');
-    }
-    return response.json();
-  })
-  .then(data => {
-    console.log('Help request successful:', data);
-  })
-  .catch(error => {
-    console.error('There was a problem with the help request:', error);
-  });
-};
+  const dismissHelpCard = () => {
+    setHelpCardVisible(false);
+    setIncomingHelpRequest(null);
+    setInlineHelpExtension([]);
+  };
 
+  const copyTeamToPersonal = () => {
+    setPersonalCode(ytext.toString());
+  };
 
+  const copyPersonalToTeam = () => {
+    const current = ytext.toString();
+    ytext.delete(0, current.length);
+    ytext.insert(0, personalCode);
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   return (
     <>
-      <Container fluid h={"90vh" } p={0}>
-          <PanelGroup direction="vertical">
-      
+      <Container fluid h={"90vh"} p={0}>
+        {/* Helpee-side banners */}
+        {helpSessionActive && (
+          <div className={styles.helpSessionBanner}>
+            <Group justify="space-between" px="sm">
+              <Group gap="xs" align="center">
+                <span className={styles.helpSessionDot} />
+                <span>Help session active with <strong>{helpSessionHelper}</strong></span>
+              </Group>
+              <Badge color="green" variant="filled" size="sm">{formatTime(helpSessionTimeLeft)}</Badge>
+            </Group>
+          </div>
+        )}
+        {helpRequested && !helpSessionActive && (
+          <div className={styles.helpRequestedBanner}>
+            <Group gap="xs" align="center" justify="center">
+              <span className={styles.searchingDot} />
+              <span>Looking for a helper...</span>
+            </Group>
+          </div>
+        )}
+
+        <PanelGroup direction="vertical">
           <Panel defaultSize={50} minSize={20}>
-          <PanelGroup direction="horizontal">
-              {/* --- Original Team Editor Panel --- */}
-              <Panel defaultSize={50} minSize={20}> {/* Adjust defaultSize as needed */}
+            <PanelGroup direction="horizontal">
+              {/* LEFT SIDE: Tabs (Team Editor + other participants) */}
+              <Panel defaultSize={50} minSize={20}>
+                <Tabs value={activeTab} onChange={setActiveTab} style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                  <Tabs.List>
+                    <Tabs.Tab value="team">
+                      Team Editor
+                      {Object.entries(typingUsers).filter(([uid]) => uid !== storedUserId).filter(([, ed]) => ed === 'team').length > 0 && (
+                        <span className={styles.typingDot} />
+                      )}
+                    </Tabs.Tab>
+                    {otherParticipants.map(p => (
+                      <Tabs.Tab key={p} value={p}>
+                        {p}'s Editor
+                        {typingUsers[p] && <span className={styles.typingDot} />}
+                      </Tabs.Tab>
+                    ))}
+                  </Tabs.List>
+
+                  {/* Team Editor Tab */}
+                  <Tabs.Panel value="team" style={{ flexGrow: 1, display: activeTab === 'team' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
+                    <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
+                      <Group gap="xs" align="center">
+                        {Object.entries(typingUsers).filter(([, ed]) => ed === 'team').map(([uid]) => (
+                          <span key={uid} className={styles.typingIndicator}>{uid} is typing...</span>
+                        ))}
+                      </Group>
+                    </Group>
+                    <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
+                      <CodeMirror
+                        height="100%"
+                        extensions={[
+                          python(),
+                          yCollab(ytext, provider.awareness),
+                          runIconField,
+                          runIconGutter,
+                          runIconGutterTheme,
+                          ViewPlugin.fromClass(class { update(u: ViewUpdate) { if (u.docChanged) sendTypingEvent('team'); } }),
+                        ]}
+                        style={{ height: '100%' }}
+                      />
+                    </div>
+                  </Tabs.Panel>
+
+                  {/* Other Participants' Editor Tabs */}
+                  {otherParticipants.map(p => (
+                    <Tabs.Panel key={p} value={p} style={{ flexGrow: 1, display: activeTab === p ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
+                      <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
+                        <Group gap="xs" align="center">
+                          <Title order={4}>{p}'s Personal Editor</Title>
+                          {typingUsers[p] && (
+                            <span className={styles.typingIndicator}>{p} is typing...</span>
+                          )}
+                        </Group>
+                      </Group>
+                      <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
+                        {otherEditors[p] ? (
+                          <CodeMirror
+                            height="100%"
+                            value={otherEditors[p]}
+                            editable={false}
+                            extensions={[python(), runIconField, runIconGutter, runIconGutterTheme]}
+                            style={{ height: '100%', opacity: 0.9 }}
+                          />
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                            <p style={{ fontSize: '14px', color: '#888' }}>{p} hasn't started editing yet</p>
+                          </div>
+                        )}
+                      </div>
+                    </Tabs.Panel>
+                  ))}
+                </Tabs>
+              </Panel>
+
+              {/* Resize Handle with copy arrows */}
+              <PanelResizeHandle className={styles.ResizeHandleOuter}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 4, padding: '0 2px' }}>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: '#888', userSelect: 'none' }}>Copy</span>
+                  <button
+                    title="Copy Left Editor to My Editor"
+                    onClick={(e) => { e.stopPropagation(); copyTeamToPersonal(); }}
+                    className={styles.copyArrowBtn}
+                  >
+                    &rarr;
+                  </button>
+                  <button
+                    title="Copy My Editor to Team Editor"
+                    onClick={(e) => { e.stopPropagation(); copyPersonalToTeam(); }}
+                    className={styles.copyArrowBtn}
+                  >
+                    &larr;
+                  </button>
+                </div>
+              </PanelResizeHandle>
+
+              {/* RIGHT SIDE: My Editor (always visible) */}
+              <Panel defaultSize={50} minSize={20}>
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                  <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc' }}>
-                    <Title order={3}>Team Editor</Title>
-                    <Group>
-                      <Button size='compact-xs'>Test</Button>
+                  <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
+                    <Group gap="xs" align="center">
+                      <Title order={3}>My Editor ({storedUserId})</Title>
+                      {Object.entries(typingUsers).filter(([, ed]) => ed === 'personal').map(([uid]) => (
+                        <span key={uid} className={styles.typingIndicator}>{uid} is typing...</span>
+                      ))}
+                      {helpSessionActive && (
+                        <Badge color="green" variant="dot" size="sm">
+                          {helpSessionHelper} is helping you
+                        </Badge>
+                      )}
+                    </Group>
+                    <Group gap="xs">
+                      <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
+                      <Button onClick={runPersonalCode} size='compact-xs'>Run</Button>
+                      <Button onClick={clearCode} size='compact-xs'>Clear</Button>
+                      <Button onClick={helpMe} size='compact-xs' color={helpRequested ? 'yellow' : 'blue'}>
+                        {helpRequested ? 'Help Requested' : 'Flag for Help'}
+                      </Button>
                     </Group>
                   </Group>
-                  <div style={{ flexGrow: 1, overflow: 'auto' }}> {/* Allow CodeMirror to take remaining space */}
-                     <CodeMirror
-                       height="100%" 
-                       extensions={[python(),yCollab(ytext,provider.awareness)]} 
-                       style={{ height: '100%' }} 
-                     />
+                  <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
+                    <CodeMirror
+                      height="100%"
+                      value={personalCode}
+                      onChange={(value) => { setPersonalCode(value); sendTypingEvent('personal'); }}
+                      extensions={[
+                        ...personalEditorExtensions,
+                        runIconField,
+                        runIconGutter,
+                        runIconGutterTheme,
+                        ...inlineHelpExtension,
+                      ]}
+                      style={{ height: '100%' }}
+                    />
+                    {/* Floating helper card — shown when someone requests help (incoming) */}
+                    {helpCardVisible && incomingHelpRequest && (
+                      <div className={styles.helperCard}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {incomingHelpRequest.helpeePhoto ? (
+                            <img
+                              src={incomingHelpRequest.helpeePhoto}
+                              alt={incomingHelpRequest.helpeeName}
+                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '3px solid #ef4444' }}
+                            />
+                          ) : (
+                            <div style={{
+                              width: 36, height: 36, borderRadius: '50%', background: '#334155',
+                              color: 'white', fontWeight: 700, display: 'flex', alignItems: 'center',
+                              justifyContent: 'center', fontSize: 16, border: '3px solid #ef4444'
+                            }}>
+                              {(incomingHelpRequest.helpeeName || incomingHelpRequest.helpeeId).charAt(0)}
+                            </div>
+                          )}
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>
+                              {incomingHelpRequest.helpeeName || incomingHelpRequest.helpeeId}
+                            </div>
+                            <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 600 }}>
+                              Needs Help
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          size="compact-xs"
+                          color="orange"
+                          mt={8}
+                          fullWidth
+                          onClick={() => {
+                            dismissHelpCard();
+                            setActiveTab(incomingHelpRequest.helpeeId);
+                          }}
+                        >
+                          Help Me When Free
+                        </Button>
+                        <Button
+                          size="compact-xs"
+                          variant="default"
+                          mt={4}
+                          fullWidth
+                          onClick={dismissHelpCard}
+                        >
+                          Close
+                        </Button>
+                      </div>
+                    )}
+                    {/* Floating helper card — proactive suggestion (helpee side: who can help me) */}
+                    {!helpCardVisible && selectedHelper && (
+                      <div className={styles.helperCard}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {selectedHelper.helperPhoto ? (
+                            <img
+                              src={selectedHelper.helperPhoto}
+                              alt={selectedHelper.helperName}
+                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '3px solid #22c55e' }}
+                            />
+                          ) : (
+                            <div style={{
+                              width: 36, height: 36, borderRadius: '50%', background: '#334155',
+                              color: 'white', fontWeight: 700, display: 'flex', alignItems: 'center',
+                              justifyContent: 'center', fontSize: 16, border: '3px solid #22c55e'
+                            }}>
+                              {selectedHelper.helperName.charAt(0)}
+                            </div>
+                          )}
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>
+                              {selectedHelper.helperName}
+                            </div>
+                            <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
+                              Can help with {selectedHelper.concepts[0]}
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          size="compact-xs"
+                          color="orange"
+                          mt={8}
+                          fullWidth
+                          onClick={() => {
+                            setSelectedHelper(null);
+                            helpMe();
+                          }}
+                        >
+                          Help Me When Free
+                        </Button>
+                        <Button
+                          size="compact-xs"
+                          variant="default"
+                          mt={4}
+                          fullWidth
+                          onClick={() => setSelectedHelper(null)}
+                        >
+                          Close
+                        </Button>
+                      </div>
+                    )}
+                    {/* Inline suggestion chips (helpee side: clickable badges below editor toolbar) */}
+                    {helperSuggestions.length > 0 && !selectedHelper && !helpCardVisible && (
+                      <div className={styles.suggestionChips}>
+                        {helperSuggestions.map(s => (
+                          <button
+                            key={s.helperId}
+                            className={styles.suggestionChip}
+                            onClick={() => setSelectedHelper(s)}
+                          >
+                            {s.helperName} can help with {s.concepts[0]}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </Panel>
-              {/* NEW: Resize Handle */}
-              <PanelResizeHandle className={styles.ResizeHandleOuter}>
-                 <div className={styles.ResizeHandleInner} style={{backgroundColor: '#eee', height: '5px'}}></div> {/* Basic styling */}
-              </PanelResizeHandle>
-                   <Panel defaultSize={50} minSize={20}>
-                  {/* Flex container to manage layout */}
-                  <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                    {/* Button Group - should not grow or shrink */}
-                    <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
-                      <Title order={3}>Personal Editor</Title>
-                      <Group>
-                        <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
-                        <Button onClick={runPersonalCode} size='compact-xs'>Run</Button>
-                        <Button onClick={clearCode} size='compact-xs'>Clear</Button>
-                        <Button onClick={helpMe} size='compact-xs'>Flag for Help</Button>
-                      </Group>
-                    </Group>
-                    {/* CodeMirror Container - should grow and scroll */}
-                    <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}> {/* Added minHeight: 0 */}
-                      <CodeMirror
-                        height="100%" // Changed from 500px to 100%
-                        value={personalCode}
-                        onChange={(value) => setPersonalCode(value)}
-                        extensions={personalEditorExtensions}
-                        style={{ height: '100%' }} // Ensure CM fills its container
-                      />
-                    </div>
+            </PanelGroup>
+          </Panel>
+
+          <PanelResizeHandle />
+
+          {/* Bottom: Graph + Output */}
+          <Panel defaultSize={50} minSize={20}>
+            <PanelGroup direction="horizontal">
+              <Panel defaultSize={50}>
+                <div style={{ padding: '10px' }}>
+                  <ReactFlowProvider>
+                    <GraphComponent onNodeSelect={handleNodeSelect} />
+                  </ReactFlowProvider>
+                </div>
+              </Panel>
+              <PanelResizeHandle />
+              <Panel defaultSize={50}>
+                <div className={styles.Output} id="output">
+                  <Title order={3}>Output</Title>
+                  <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
+                    {history.map(([timestamp, output, isCollaborative], i) => {
+                      const HOURS = timestamp.getHours().toString().padStart(2, '0');
+                      const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
+                      const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
+                      return (
+                        <div key={i}>
+                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
+                            <div style={{ whiteSpace: 'pre-wrap' }}>
+                              <ReactAnsi logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }} log={output} />
+                            </div>
+                            <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
+                          </div>
+                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`} style={{ color: 'yellow' }}>
+                            <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </Panel>
-              </PanelGroup>
-            </Panel>
-        <PanelResizeHandle />
+                </div>
+              </Panel>
+            </PanelGroup>
+          </Panel>
+        </PanelGroup>
+      </Container>
 
-              {/* NEW: Panel below Team Editor */}
-              <Panel defaultSize={50} minSize={20}>
-              <PanelGroup direction="horizontal">
-       <Panel defaultSize={50}>
-       <div style={{ padding: '10px' }}>
+      <Modal size="75%" opened={opened} onClose={close} title="Progress Tree" centered>
+        <div style={{ width: "100%", height: 500 }}>
           <ReactFlowProvider>
-
-<GraphComponent />
-</ReactFlowProvider>
-          </div>
-       </Panel>
-       <PanelResizeHandle />
-        <Panel defaultSize={50}>
-        <div className={styles.Output} id="output">
-        <Title order={3}>Output</Title>
-        <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
-          {history.map(([timestamp, output, isCollaborative], i) => {
-            const HOURS = timestamp.getHours().toString().padStart(2, '0');
-            const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
-            const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
-
-            return (
-              <div key={i}>
-                <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
-                  <div style={{ whiteSpace: 'pre-wrap' }}><ReactAnsi logStyle={{backgroundColor: 'white',color:'black', fontSize: '10px'}} log={output}/></div>
-                  <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
-                </div>
-                <div
-                  className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}
-                  style={{ color: 'yellow' }}
-                >
-                  <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
-                </div>
-              </div>
-            );
-          })}
+            <GraphComponent onNodeSelect={handleNodeSelect} />
+          </ReactFlowProvider>
         </div>
-      </div>
-        </Panel>
-      </PanelGroup>
-      </Panel>
-    </PanelGroup>
-    </Container>
+      </Modal>
 
-<Modal size="75%" opened={opened} onClose={close} title="Progress Tree" centered>
-  <div style={{ width: "100%", height: 500 }}>
-    {/* <Tree /> */}
-    <ReactFlowProvider>
-
-    <GraphComponent />
-    </ReactFlowProvider>
-
-  </div>
-</Modal>
-{isCollabModalOpen && (<CollaborativeOpportunityModal onClose={handleCollabModalClose} predictions={collabData} context={context} id={storedUserId} helpeeProfile={helpeeProfile} />
-)}
-
+      {isCollabModalOpen && (
+        <CollaborativeOpportunityModal
+          onClose={handleCollabModalClose}
+          predictions={collabData}
+          context={context}
+          id={storedUserId}
+          helpeeProfile={helpeeProfile}
+        />
+      )}
 
       {isSessionStartedModalOpen && (
         <HelpSessionStartedModal
@@ -357,24 +807,81 @@ const helpMe = () => {
           helperName={sessionDetails.helperName}
         />
       )}
- <HelpModal
-      isOpen={helpOpened}
-      id={storedUserId}
-      onClose={() => {
+
+      <HelpModal
+        isOpen={helpOpened}
+        id={storedUserId}
+        onClose={() => {
           closeHelp();
           setHelpOption(null);
-      }}
-      >
+        }}
+      />
 
-      </HelpModal>
+      {/* LeetCode-style Task Detail Drawer */}
+      <Drawer
+        opened={taskDrawerOpen}
+        onClose={() => setTaskDrawerOpen(false)}
+        position="right"
+        size="md"
+        title={
+          <Group gap="xs">
+            <Title order={3}>{selectedTask?.name}</Title>
+          </Group>
+        }
+        overlayProps={{ backgroundOpacity: 0.1 }}
+      >
+        {selectedTask && (
+          <div>
+            <Text size="sm" fw={600} c="dimmed" mb={4}>Concepts</Text>
+            <Group gap={6} mb="md">
+              {selectedTask.concepts.split(',').map((c, i) => (
+                <Badge key={i} variant="light" color="blue" size="sm">{c.trim()}</Badge>
+              ))}
+            </Group>
+
+            <Text size="sm" fw={600} c="dimmed" mb={4}>Description</Text>
+            <Text size="sm" mb="md">{selectedTask.description}</Text>
+
+            <Divider my="sm" />
+
+            <Text size="sm" fw={600} c="dimmed" mb={4}>Example Input</Text>
+            <Code block style={{ fontSize: 13, marginBottom: 16 }}>
+              {selectedTask.example_input}
+            </Code>
+
+            <Text size="sm" fw={600} c="dimmed" mb={4}>Example Output</Text>
+            <Code block style={{ fontSize: 13, marginBottom: 16 }}>
+              {selectedTask.example_output}
+            </Code>
+
+            <Divider my="sm" />
+
+            <Text size="sm" fw={600} c="dimmed" mb={4}>Starter Code</Text>
+            <Code block style={{ fontSize: 13 }}>
+              {selectedTask.starter_code}
+            </Code>
+
+            <Button
+              mt="md"
+              fullWidth
+              onClick={() => {
+                setPersonalCode(selectedTask.starter_code);
+                setTaskDrawerOpen(false);
+              }}
+            >
+              Load into My Editor
+            </Button>
+          </div>
+        )}
+      </Drawer>
     </>
   )
 }
+
 // Y.js Collaboration Extension
 const ydoc = new Y.Doc();
 const provider = new WebrtcProvider('prime-collab-room-demo', ydoc, {
-  // signaling: ['wss://prime-lab.cs.vt.edu:4444'],
-    signaling: ['http://localhost:4444'], //this is for local testing
+  signaling: ['ws://localhost:4444'],
   peerOpts: {
     config: {
       iceServers: [
@@ -425,4 +932,3 @@ provider.awareness.setLocalStateField('user', {
   color: color.color,
   colorLight: color.light,
 });
-

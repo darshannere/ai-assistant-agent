@@ -2,6 +2,7 @@ import { Route, Routes, Link, useLocation } from 'react-router-dom';
 import { Title, AppShell, Text, Group, Burger, Avatar } from '@mantine/core';
 import { useDisclosure, useLocalStorage } from '@mantine/hooks';
 import { useState, useEffect } from 'react';
+import styles from './app.module.css';
 import Home from "./components/Home"
 import Editor from "./components/Editor"
 import CollaborativeFlow from "./components/Tree2"
@@ -53,7 +54,10 @@ export function App() {
           <Group h="100%" px="md">
             <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             <Group justify="space-between" style={{ flex: 1 }}>
-              <Title order={2}>Canary</Title>
+              <div className={styles.brandTitleWrap}>
+                <span className={styles.brandIcon} aria-hidden="true">&#x1F424;</span>
+                <Title order={2} className={styles.brandTitle}>Canary</Title>
+              </div>
               {showProfile && (
                 <Group ml="xl" gap={10} visibleFrom="sm">
                   {profile && profile.photo ? (

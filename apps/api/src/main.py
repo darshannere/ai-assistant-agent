@@ -124,7 +124,7 @@ class SocketManager:
 
 
 class GraphNode:
-    def __init__(self, name: str, desc: str, concepts: str):
+    def __init__(self, name: str, desc: str, concepts: str, example_input: str = "", example_output: str = ""):
         self.name = name
         self.claimed_by = ""
 
@@ -137,6 +137,8 @@ class GraphNode:
         self.total = 0
         self.desc = desc
         self.concepts = concepts
+        self.example_input = example_input
+        self.example_output = example_output
         self.start_time = None
 
     def update_status(self, id: str):
@@ -169,12 +171,19 @@ class GraphNode:
         if self.claimed_by != "":
             if completed == remaining and remaining != 0:
                 self.work_status = 2
-                editor_manager.profiles[self.claimed_by] = ""
+                participant = self.claimed_by
+                editor_manager.profiles[participant] = ""
+                # Accumulate concepts for this participant
+                new_concepts = [c.strip() for c in self.concepts.split(",") if c.strip()]
+                existing = editor_manager.participant_concepts.get(participant, [])
+                editor_manager.participant_concepts[participant] = list(
+                    dict.fromkeys(existing + new_concepts)  # deduplicate, preserve order
+                )
                 editor_manager.message_history.append(
                     {"role": "user", "content": f"{self.name} is complete"}
                 )
                 await editor_manager.send_notification(
-                    id=self.claimed_by,
+                    id=participant,
                     task=self.name,
                     done=True,
                     time=get_time_diff(self.start_time),
@@ -187,6 +196,40 @@ class GraphNode:
 
 def get_time_diff(start_time: datetime) -> int:
     return int((datetime.now() - start_time).total_seconds())
+
+
+def get_participant_states() -> dict:
+    """
+    Returns cognitive state for each known participant.
+    'unavailable' = actively working on a task (work_status == 1)
+    'available'   = idle or just finished (no active task)
+    Includes profile photo/name if available.
+    """
+    states = {}
+    for node in graph_manager.graph.values():
+        if node.work_status == 1 and node.claimed_by:
+            pid = node.claimed_by
+            profile = profile_manager.get_profile(pid)
+            if pid not in states:
+                states[pid] = {
+                    "status": "unavailable",
+                    "currentTasks": [],
+                    "name": profile.name if profile else pid,
+                    "photo": profile.photo if profile else None,
+                    "concepts": editor_manager.participant_concepts.get(pid, []),
+                }
+            states[pid]["currentTasks"].append(node.name)
+    # Mark participants with known profiles who aren't working as available
+    for pid, profile in profile_manager.get_all_profiles().items():
+        if pid not in states:
+            states[pid] = {
+                "status": "available",
+                "currentTasks": [],
+                "name": profile.name,
+                "photo": profile.photo,
+                "concepts": editor_manager.participant_concepts.get(pid, []),
+            }
+    return states
 
 
 class GraphManager:
@@ -202,6 +245,8 @@ class GraphManager:
                     name=row["Function"],
                     desc=row["description"],
                     concepts=row["Concepts"],
+                    example_input=row.get("example_input", ""),
+                    example_output=row.get("example_output", ""),
                 )
 
     def update_status(self, node_id: str, id: str):
@@ -217,7 +262,10 @@ class GraphManager:
 
         event = {
             "event": "updateGraph",
-            "payload": {"graph": dict(ChainMap(*work_statuses))},
+            "payload": {
+                "graph": dict(ChainMap(*work_statuses)),
+                "participantStates": get_participant_states(),
+            },
         }
         await socketManager.broadcast(json.dumps(event))
 
@@ -257,6 +305,7 @@ class EditorManager:
         self.individual = {}
         self.profiles = {}
         self.help_queue = []
+        self.participant_concepts: Dict[str, List[str]] = {}  # accumulated concepts per participant
         # client = genai.Client(api_key="")
         # self.client = client
         client = OpenAI(
@@ -496,6 +545,10 @@ class EditorManager:
         Generates help options for the user to choose from
         """
         prompt = f"User {id} has completed {task} in {time} seconds \n"
+
+        known_concepts = self.participant_concepts.get(id, [])
+        if known_concepts:
+            prompt += f"{id} has mastered these concepts so far: {', '.join(known_concepts)}.\n"
 
         prompt += (
             f"""Suggest 3 options for {id} using their concept knowledge
@@ -881,7 +934,10 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                 ]
                 event = {
                     "event": "updateGraph",
-                    "payload": {"graph": dict(ChainMap(*work_statuses))},
+                    "payload": {
+                        "graph": dict(ChainMap(*work_statuses)),
+                        "participantStates": get_participant_states(),
+                    },
                 }
                 await socketManager.broadcast(json.dumps(event))
 
@@ -894,6 +950,10 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                 }
                 await socketManager.broadcast(json.dumps(event))
 
+            if loaded["event"] in ("typing", "stoppedTyping"):
+                print(f"[typing] {loaded['event']} from {id}: {loaded.get('payload', {})}")
+                await socketManager.broadcast(data)
+
             if loaded["event"] == "updateNode":
                 graph_manager.update_status(
                     node_id=loaded["payload"]["node"], id=loaded["payload"]["id"]
@@ -904,7 +964,10 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                 ]
                 event = {
                     "event": "updateGraph",
-                    "payload": {"graph": dict(ChainMap(*work_statuses))},
+                    "payload": {
+                        "graph": dict(ChainMap(*work_statuses)),
+                        "participantStates": get_participant_states(),
+                    },
                 }
                 await socketManager.broadcast(json.dumps(event))
 
@@ -943,11 +1006,55 @@ def draw_done(id: str, completed_time: int, remaining_time: int):
         asyncio.run(socketManager.broadcast(json.dumps(event)))
     return {"status": "success"}
 
+FUNCTION_SIGNATURES = {
+    "view_menu": "view_menu(menu)",
+    "create_order": "create_order(customer)",
+    "clear_order": "clear_order(customer, order_id)",
+    "view_order_summary": "view_order_summary(order, menu)",
+    "add_to_order": "add_to_order(customer, order_id, menu, item)",
+    "remove_from_order": "remove_from_order(customer, order_id, menu, item)",
+    "calculate_order_cost": "calculate_order_cost(order, menu)",
+    "get_receipt": "get_receipt(customer, menu)",
+    "add_to_queue": "add_to_queue(restaurant, customer)",
+    "cook_order": "cook_order(restaurant)",
+    "restock_inventory": "restock_inventory(restaurant, item, quantity)",
+    "cook_time_helper": "cook_time_helper(restaurant, item)",
+    "inventory_helper": "inventory_helper(restaurant, item)",
+    "average_cook_time": "average_cook_time(restaurant)",
+}
+
+
+@app.get("/task/{node}")
+def get_task_details(node):
+    """Return structured task data (description, concepts, examples, starter code) as JSON."""
+    if node not in graph_manager.graph:
+        return {"status": "not_found"}
+    g = graph_manager.graph[node]
+    signature = FUNCTION_SIGNATURES.get(node, f"{node}()")
+    starter = f'def {signature}:\n    """\n    {g.desc}\n    """\n    pass\n'
+    return {
+        "status": "ok",
+        "name": node,
+        "description": g.desc,
+        "concepts": g.concepts,
+        "example_input": g.example_input,
+        "example_output": g.example_output,
+        "starter_code": starter,
+    }
+
+
 @app.get("/lookup/{node}")
 def lookup_description(node):
     if node in graph_manager.graph:
         looked_up = graph_manager.graph[node]
         html_str = f"<p>{looked_up.desc}</p><i>{looked_up.concepts}</i>"
+        if looked_up.example_input or looked_up.example_output:
+            html_str += "<hr style='margin:6px 0;border-color:#555;'/>"
+        if looked_up.example_input:
+            html_str += f"<p style='margin:2px 0;'><b>Example input:</b><br><code style='font-size:11px;'>{looked_up.example_input}</code></p>"
+        if looked_up.example_output:
+            output_formatted = looked_up.example_output.replace("\n", "<br>")
+            html_str += f"<p style='margin:2px 0;'><b>Example output:</b><br><code style='font-size:11px;'>{output_formatted}</code></p>"
         if looked_up.claimed_by != "":
             # Get profile from backend and show avatar
             profile = profile_manager.get_profile(looked_up.claimed_by)
@@ -971,9 +1078,21 @@ def lookup_description(node):
 
 
 @app.post("/profile")
-def save_profile(profile: ParticipantProfile):
+async def save_profile(profile: ParticipantProfile):
     """Save participant profile to backend"""
     profile_manager.save_profile(profile)
+    work_statuses = [
+        {node: graph_manager.graph[node].work_status}
+        for node in graph_manager.graph
+    ]
+    event = {
+        "event": "updateGraph",
+        "payload": {
+            "graph": dict(ChainMap(*work_statuses)),
+            "participantStates": get_participant_states(),
+        },
+    }
+    await socketManager.broadcast(json.dumps(event))
     return {"status": "success", "profile": profile}
 
 
@@ -986,10 +1105,68 @@ def get_profile(participant_id: str):
     return {"status": "not_found", "profile": None}
 
 
+@app.get("/helperSuggestions/{participant_id}")
+def get_helper_suggestions(participant_id: str):
+    """Return inline helper suggestions: who can help with what concept for the current user's task."""
+    participant_id = participant_id.replace('"', '')
+
+    # Find what function this participant is currently working on
+    current_task = editor_manager.profiles.get(f'"{participant_id}"', '') or editor_manager.profiles.get(participant_id, '')
+    if not current_task:
+        return {"suggestions": []}
+
+    # Get concepts for the current task
+    task_concepts = []
+    if current_task in graph_manager.graph:
+        task_concepts = [c.strip() for c in graph_manager.graph[current_task].concepts.split(",") if c.strip()]
+
+    if not task_concepts:
+        return {"suggestions": []}
+
+    # Find other participants who have completed functions with matching concepts
+    suggestions = []
+    for other_id, their_concepts in editor_manager.participant_concepts.items():
+        if other_id.replace('"', '') == participant_id:
+            continue
+        matching = set(task_concepts) & set(their_concepts)
+        if matching:
+            other_profile = profile_manager.get_profile(other_id.replace('"', ''))
+            suggestions.append({
+                "helperId": other_id.replace('"', ''),
+                "helperName": other_profile.name if other_profile else other_id,
+                "helperPhoto": other_profile.photo if other_profile else None,
+                "concepts": list(matching),
+            })
+
+    return {"suggestions": suggestions, "currentTask": current_task, "taskConcepts": task_concepts}
+
+
 @app.get("/profiles")
 def get_all_profiles():
     """Get all participant profiles"""
     return {"status": "success", "profiles": profile_manager.get_all_profiles()}
+
+
+@app.get("/debug/states")
+def debug_states():
+    """Debug endpoint: returns current participant cognitive states and accumulated concepts."""
+    return {
+        "participantStates": get_participant_states(),
+        "accumulatedConcepts": editor_manager.participant_concepts,
+        "activeProfiles": editor_manager.profiles,
+    }
+
+
+@app.post("/debug/simulate-concepts")
+def debug_simulate_concepts(body: dict):
+    """Debug: simulate a participant having completed concepts so helper suggestions work.
+    POST { "participant": "B", "concepts": ["Dictionary Lookup", "List Operations"] }
+    """
+    pid = body.get("participant", "")
+    concepts = body.get("concepts", [])
+    existing = editor_manager.participant_concepts.get(pid, [])
+    editor_manager.participant_concepts[pid] = list(set(existing + concepts))
+    return {"status": "ok", "participant_concepts": editor_manager.participant_concepts}
 
 
 @app.post("/reply")
@@ -1030,7 +1207,26 @@ async def reply_to_help(body: ReplyBody):
 
 @app.post("/helpMe")
 async def helpMe(body: ReplyBody):
+    # Send help-type options back to the helpee
     await editor_manager.send_notification(body.id, task="", done=False)
+
+    # Immediately broadcast to all OTHER participants that this user needs help
+    helpee_id = body.id.replace('"', '')
+    helpee_profile = profile_manager.get_profile(helpee_id)
+    helpee_name = helpee_profile.name if helpee_profile else helpee_id
+    helpee_photo = helpee_profile.photo if helpee_profile else None
+
+    broadcast_event = {
+        "event": "helpRequest",
+        "payload": {
+            "helpeeId": helpee_id,
+            "helpeeName": helpee_name,
+            "helpeePhoto": helpee_photo,
+        },
+    }
+    for ws in socketManager.connections:
+        if ws.id != helpee_id:
+            await ws.send_text(json.dumps(broadcast_event))
 
 
 @app.on_event("startup")

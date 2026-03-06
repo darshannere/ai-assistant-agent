@@ -98,7 +98,11 @@ const initialLinks = [
 
 
 // --- React Component ---
-const GraphComponent = () => {
+interface GraphComponentProps {
+    onNodeSelect?: (nodeId: string) => void;
+}
+
+const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
     const reactFlowInstance = useReactFlow();
     const [nodes, setNodes, onNodesChange] = useNodesState<Node[]>([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
@@ -108,7 +112,10 @@ const GraphComponent = () => {
     const [tooltipContent, setTooltipContent] = useState<string | null>(null);
     const [tooltipPosition, setTooltipPosition] = useState<{ x: number, y: number } | null>(null);
     const [tooltipVisible, setTooltipVisible] = useState<boolean>(false);
-    
+    const [participantStates, setParticipantStates] = useState<Record<string, { status: string; name: string; photo?: string; currentTasks?: string[] }>>({});
+    const [participantHoverId, setParticipantHoverId] = useState<string | null>(null);
+    const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
+
     // Read participant ID fresh on each render
     const animalId = localStorage.getItem("participant-id") || "D";
     const storedUserId = animalId.replace(/"/g, '');
@@ -146,7 +153,14 @@ const GraphComponent = () => {
         console.log("Layout calculated:", layoutedNodes, layoutedEdges);
 
     }, []);
-    
+
+    // Fetch initial participant states on mount
+    useEffect(() => {
+        fetch(`http://${backendServer}:8000/debug/states`)
+            .then((r) => r.json())
+            .then((data) => setParticipantStates(data.participantStates || {}))
+            .catch((e) => console.warn("Failed to fetch participant states:", e));
+    }, []);
 
     useEffect(() => {
         if (!ws.current || ws.current.readyState === WebSocket.CLOSED) {
@@ -174,9 +188,20 @@ const GraphComponent = () => {
                     const data = JSON.parse(event.data);
                     console.debug("WebSocket Message Received:", data); 
 
+                    if (data.event === 'typing') {
+                        const { id: tid, editor } = data.payload;
+                        setTypingUsers(prev => ({ ...prev, [tid]: editor }));
+                    }
+                    if (data.event === 'stoppedTyping') {
+                        const { id: tid } = data.payload;
+                        setTypingUsers(prev => { const next = { ...prev }; delete next[tid]; return next; });
+                    }
+
                     if (data.event === 'updateGraph' && data.payload && data.payload.graph) {
                         const graphStatus = data.payload.graph;
-                        console.log("Received graph update:", graphStatus);
+                        const states = data.payload.participantStates || {};
+                        console.log("Received graph update:", graphStatus, "participantStates:", states);
+                        setParticipantStates(states);
 
                         setNodes((currentNodes) =>
                             currentNodes.map((node) => {
@@ -228,6 +253,11 @@ const GraphComponent = () => {
         console.log(`Node clicked: ${node.id}`, node);
         jumpToFunction(node.id); // Call your navigation function
 
+        // Notify parent component about the selected node
+        if (onNodeSelect) {
+            onNodeSelect(node.id);
+        }
+
         // Send update via WebSocket
         if (ws.current && ws.current.readyState === WebSocket.OPEN) {
             const message = {
@@ -238,9 +268,8 @@ const GraphComponent = () => {
             ws.current.send(JSON.stringify(message));
         } else {
             console.error("WebSocket not open. Cannot send updateNode message.");
-            // Optionally queue the message or show an error to the user
         }
-    }, [storedUserId]); // Include dependencies needed by the handler
+    }, [storedUserId, onNodeSelect]);
 
 
     // --- Tooltip / Mouse Hover Handling (Basic Example) ---
@@ -334,10 +363,99 @@ const GraphComponent = () => {
                 <MiniMap nodeStrokeWidth={3} zoomable pannable />
                 <Background variant="dots" gap={15} size={1} />
 
-                {/* Optional: Add a panel for status or buttons */}
+                {/* Graph Status and Participant Avatars */}
                 <Panel position="top-left">
                     <div>Graph Status</div>
-                    {/* You could display WebSocket connection status here */}
+                    {Object.keys(typingUsers).length > 0 && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: '#555' }}>
+                            {Object.entries(typingUsers).map(([uid, editor]) => {
+                                const ps = participantStates[uid];
+                                const displayName = ps?.name || uid;
+                                const editorLabel = editor === 'team' ? 'Team Editor' : 'Personal Editor';
+                                return (
+                                    <div key={uid} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                                        {ps?.photo && <img src={ps.photo} alt={displayName} style={{ width: 16, height: 16, borderRadius: '50%', objectFit: 'cover' }} />}
+                                        <span><b>{displayName}</b> is typing in {editorLabel}...</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                        {Object.entries(participantStates).filter(([, ps]) => ps.status === 'available').map(([pid, ps]) => {
+                            const ringColor = '#22c55e';
+                            const tooltipText = 'Looking for a new task';
+                            const showTooltip = participantHoverId === pid;
+                            return (
+                                <div
+                                    key={pid}
+                                    onMouseEnter={() => setParticipantHoverId(pid)}
+                                    onMouseLeave={() => setParticipantHoverId(null)}
+                                    title={tooltipText}
+                                    style={{
+                                        position: 'relative',
+                                        width: 40,
+                                        height: 40,
+                                        borderRadius: '50%',
+                                        padding: 3,
+                                        border: `3px solid ${ringColor}`,
+                                        background: '#fff',
+                                        cursor: 'default',
+                                    }}
+                                >
+                                    {ps.photo ? (
+                                        <img
+                                            src={ps.photo}
+                                            alt={ps.name}
+                                            style={{
+                                                width: '100%',
+                                                height: '100%',
+                                                borderRadius: '50%',
+                                                objectFit: 'cover',
+                                            }}
+                                        />
+                                    ) : (
+                                        <div
+                                            style={{
+                                                width: '100%',
+                                                height: '100%',
+                                                borderRadius: '50%',
+                                                background: ringColor,
+                                                color: '#fff',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                fontSize: 14,
+                                                fontWeight: 'bold',
+                                            }}
+                                        >
+                                            {pid}
+                                        </div>
+                                    )}
+                                    {showTooltip && (
+                                        <div
+                                            style={{
+                                                position: 'absolute',
+                                                left: '50%',
+                                                bottom: '100%',
+                                                transform: 'translateX(-50%) translateY(-6px)',
+                                                padding: '6px 10px',
+                                                background: 'rgba(0,0,0,0.9)',
+                                                color: '#fff',
+                                                fontSize: 12,
+                                                borderRadius: 4,
+                                                whiteSpace: 'nowrap',
+                                                zIndex: 1002,
+                                                pointerEvents: 'none',
+                                            }}
+                                        >
+                                            {tooltipText}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
                 </Panel>
               {/* Render NodeToolbar conditionally for hovered node */}
               {nodes.map((node) => (
@@ -372,6 +490,37 @@ const GraphComponent = () => {
                         )}
                     </NodeToolbar>
                 ))}
+
+              {/* Avatar badges on occupied nodes */}
+              {Object.entries(participantStates)
+                .filter(([, ps]) => ps.status === 'unavailable' && ps.currentTasks && ps.currentTasks.length > 0)
+                .flatMap(([pid, ps]) =>
+                  ps.currentTasks!.map((task) => (
+                    <NodeToolbar
+                        key={`avatar-${pid}-${task}`}
+                        nodeId={task}
+                        isVisible={true}
+                        position={Position.Top}
+                        align="end"
+                        offset={-8}
+                        style={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0, zIndex: 1000, pointerEvents: 'none' }}
+                    >
+                        <div
+                            title={`${ps.name || pid} is working here`}
+                            style={{
+                                width: 28, height: 28, borderRadius: '50%',
+                                border: '3px solid #ef4444', background: '#fff',
+                                overflow: 'hidden',
+                            }}
+                        >
+                            {ps.photo
+                                ? <img src={ps.photo} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={ps.name} />
+                                : <div style={{ width: '100%', height: '100%', background: '#ef4444', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 'bold' }}>{pid}</div>
+                            }
+                        </div>
+                    </NodeToolbar>
+                  ))
+                )}
             </ReactFlow>
         </div>
     );

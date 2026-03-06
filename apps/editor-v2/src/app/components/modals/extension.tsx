@@ -2,39 +2,50 @@ import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { Extension } from "@codemirror/state"; 
 
 /**
- * Creates a CodeMirror ViewPlugin that sends document updates over a WebSocket.
- * @param ws The WebSocket instance to send updates through.
- * @param userId The ID of the user making the changes.
- * @returns A CodeMirror Extension (ViewPlugin).
+ * Creates a CodeMirror ViewPlugin that sends document updates and typing
+ * indicators over a WebSocket whenever the personal editor content changes.
  */
 export function createPersonalEditorUpdateExtension(ws: WebSocket, userId: string): Extension {
+  let typingTimeout: ReturnType<typeof setTimeout> | null = null;
+
   return ViewPlugin.fromClass(class {
     constructor(private view: EditorView) {
     }
 
     update(update: ViewUpdate) {
-      // `update.docChanged` is true if the document's content has changed.
       if (update.docChanged) {
-        // Check if WebSocket is open and ready to send.
         if (ws && ws.readyState === WebSocket.OPEN) {
           const currentDoc = this.view.state.doc.toString();
-          const payload = {
-            userId: userId,
-            doc: currentDoc, // The full content of the personal editor
-            timeStamp: new Date().getTime()
-          };
 
           ws.send(JSON.stringify({
             event: "updatePlayground", 
-            payload: payload
+            payload: {
+              userId: userId,
+              doc: currentDoc,
+              timeStamp: new Date().getTime()
+            }
           }));
-          
+
+          ws.send(JSON.stringify({
+            event: 'typing',
+            payload: { id: userId, editor: 'personal' }
+          }));
+
+          if (typingTimeout) clearTimeout(typingTimeout);
+          typingTimeout = setTimeout(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                event: 'stoppedTyping',
+                payload: { id: userId }
+              }));
+            }
+          }, 2000);
         }
       }
     }
 
-    // destroy() {
-    //   // Perform any cleanup here if necessary (e.g., if the plugin had its own resources).
-    // }
+    destroy() {
+      if (typingTimeout) clearTimeout(typingTimeout);
+    }
   });
 }

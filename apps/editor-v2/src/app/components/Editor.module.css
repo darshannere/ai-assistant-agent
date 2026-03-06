@@ -1,8 +1,11 @@
 
 .ResizeHandleOuter {
-  flex: 0 0 10px;
+  flex: 0 0 36px;
   position: relative;
   outline: none;
+  background: #f5f5f5;
+  border-left: 1px solid #ddd;
+  border-right: 1px solid #ddd;
 }
 
 .ResizeHandleInner {
@@ -15,117 +18,254 @@
   background-color: black;
 }
 
+.copyArrowBtn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: bold;
+  color: #555;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  line-height: 1;
+  padding: 0;
+}
+
+.copyArrowBtn:hover {
+  background: #228be6;
+  color: #fff;
+  border-color: #228be6;
+}
+
 .Output {
   background-color: lightgrey;
   padding: 10px;
 }
 
+/* --- Helpee-side banners --- */
+.helpSessionBanner {
+  background: #dcfce7;
+  border-bottom: 2px solid #22c55e;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #166534;
+  font-weight: 500;
+  flex-shrink: 0;
+}
 
-/* Define base styles if needed, e.g., for box-sizing */
+.helpSessionDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: helpPulse 1.5s infinite;
+}
+
+.helpRequestedBanner {
+  background: #fef9c3;
+  border-bottom: 2px solid #eab308;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #854d0e;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.searchingDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #eab308;
+  animation: helpPulse 1s infinite;
+}
+
+.incomingHelpBanner {
+  background: #dbeafe;
+  border-bottom: 2px solid #3b82f6;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #1e3a5f;
+  font-weight: 500;
+  flex-shrink: 0;
+  animation: bannerSlideIn 300ms ease-out;
+}
+
+/* --- Floating helper card (like Panayu's TomCardPop) --- */
+.helperCard {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: white;
+  padding: 12px 14px;
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  min-width: 180px;
+  animation: helperCardPop 320ms ease-out;
+  transform-origin: top right;
+}
+
+/* --- Inline suggestion chips (below editor) --- */
+.suggestionChips {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 15;
+}
+
+.suggestionChip {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #16a34a;
+  border: 1px solid #15803d;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.suggestionChip:hover {
+  background: #15803d;
+  transform: scale(1.03);
+}
+
+@keyframes helperCardPop {
+  0% { opacity: 0; transform: translateY(-10px) scale(0.95); }
+  60% { opacity: 1; transform: translateY(1px) scale(1.01); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes bannerSlideIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes helpPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* --- Typing indicators --- */
+@keyframes typingPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.typingIndicator {
+  font-size: 12px;
+  color: #888;
+  font-style: italic;
+  animation: typingPulse 1.5s infinite;
+}
+
+.typingDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #228be6;
+  margin-left: 6px;
+  animation: typingPulse 1s infinite;
+}
+
+/* --- General resets --- */
 *, *::before, *::after {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: sans-serif; /* Or your preferred font */
+  font-family: sans-serif;
 }
 
 /* Main application container */
 .puzzle-app-container {
   display: flex;
   flex-direction: column;
-  height: 100vh; /* Full viewport height */
-  width: 100vw;  /* Full viewport width */
-  overflow: hidden; /* Prevent scrolling on the body level */
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
 }
 
 /* Completion banner */
 .completion-banner {
   padding: 1rem;
-  background-color: #a7f3d0; /* Equivalent to bg-green-200 */
-  color: #065f46; /* Equivalent to text-green-800 */
-  font-weight: 700; /* bold */
+  background-color: #a7f3d0;
+  color: #065f46;
+  font-weight: 700;
   text-align: center;
-  flex-shrink: 0; /* Prevent banner from shrinking */
+  flex-shrink: 0;
 }
 
 /* React Flow canvas container */
 .canvas-container {
   width: 100%;
-  border-bottom: 1px solid #d1d5db; /* Equivalent to border-b border-gray-300 */
-  /* Height is set inline: style={{ height: '500px' }} */
+  border-bottom: 1px solid #d1d5db;
 }
 
 /* Palette container */
 .palette-container {
-  flex: 1 1 0%; /* Equivalent to flex-1 (grow, shrink, basis) */
+  flex: 1 1 0%;
   width: 100%;
-  padding: 1rem; /* p-4 */
-  overflow-y: auto; /* scroll if content overflows */
-  background-color: #f3f4f6; /* Equivalent to bg-gray-100 */
+  padding: 1rem;
+  overflow-y: auto;
+  background-color: #f3f4f6;
 }
 
-/* Palette title */
 .palette-title {
-  font-size: 1.125rem; /* text-lg */
-  font-weight: 600; /* semibold */
-  margin-bottom: 0.75rem; /* mb-3 */
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
 }
 
-/* Wrapper for the node buttons */
 .palette-nodes {
   display: flex;
-  flex-wrap: wrap; /* Allow items to wrap */
-  gap: 0.5rem; /* Equivalent to gap-2 */
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
-/* Individual node button in the palette */
 .palette-node-button {
-  padding: 0.375rem 0.75rem; /* py-1.5 px-3 */
-  background-color: #ffffff; /* bg-white */
-  border: 1px solid #d1d5db; /* border border-gray-300 */
-  border-radius: 0.25rem; /* rounded */
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06); /* shadow */
-  font-size: 0.875rem; /* text-sm */
+  padding: 0.375rem 0.75rem;
+  background-color: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  font-size: 0.875rem;
   cursor: pointer;
-  transition: background-color 0.2s ease-in-out; /* Smooth hover effect */
+  transition: background-color 0.2s ease-in-out;
 }
 
-/* Hover effect for the button */
 .palette-node-button:hover {
-  background-color: #f9fafb; /* Equivalent to hover:bg-gray-50 */
+  background-color: #f9fafb;
 }
 
-/* Message text in the palette */
 .palette-message {
-  color: #6b7280; /* Equivalent to text-gray-500 */
-  width: 100%; /* Take full width to appear on its own line */
-  margin: 0.5rem 0; /* Add some spacing */
+  color: #6b7280;
+  width: 100%;
+  margin: 0.5rem 0;
 }
 
-
-/* --- Edge Styles (Copied from previous step) --- */
-
-/* Style for correctly connected edges */
+/* --- Edge Styles --- */
 .correct-edge .react-flow__edge-path {
-  stroke: #4caf50; /* Green */
+  stroke: #4caf50;
   stroke-width: 2;
 }
 
-/* Style for incorrectly connected edges */
 .incorrect-edge .react-flow__edge-path {
-  stroke: #f44336; /* Red */
+  stroke: #f44336;
   stroke-width: 2;
-  stroke-dasharray: 5 5; /* Make it dashed */
+  stroke-dasharray: 5 5;
 }
-
-/* Optional: Default node styles (if not overridden by React Flow defaults) */
-/* .react-flow__node-default { */
-  /* border: 1px solid #1a192b; */
-  /* background: white; */
-  /* padding: 10px 15px; */
-  /* border-radius: 5px; */
-  /* font-size: 12px; */
-  /* text-align: center; */
-/* } */
