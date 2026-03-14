@@ -1169,6 +1169,17 @@ def debug_simulate_concepts(body: dict):
     return {"status": "ok", "participant_concepts": editor_manager.participant_concepts}
 
 
+@app.post("/debug/simulate-task")
+def debug_simulate_task(body: dict):
+    """Debug: simulate a participant working on a task.
+    POST { "participant": "A", "task": "calculate_order_cost" }
+    """
+    pid = body.get("participant", "")
+    task = body.get("task", "")
+    editor_manager.profiles[pid] = task
+    return {"status": "ok", "profiles": editor_manager.profiles}
+
+
 @app.post("/reply")
 async def reply_to_notif(body: ReplyBody):
     # user_response(body.id, body.choice)
