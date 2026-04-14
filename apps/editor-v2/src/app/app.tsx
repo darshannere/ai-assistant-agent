@@ -1,11 +1,14 @@
 import { Route, Routes, Link, useLocation } from 'react-router-dom';
-import { Title, AppShell, Text, Group, Burger, Avatar } from '@mantine/core';
+import { Title, AppShell, Text, Group, Burger, Avatar, Button, Drawer, Indicator } from '@mantine/core';
 import { useDisclosure, useLocalStorage } from '@mantine/hooks';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import styles from './app.module.css';
 import Home from "./components/Home"
 import Editor from "./components/Editor"
 import CollaborativeFlow from "./components/Tree2"
+import HelpRequests from "./components/HelpRequests"
+import HelpRequestsPanel from "./components/HelpRequestsPanel"
+import { BACKEND_URL } from './config';
 export function App() {
   const [opened, { toggle }] = useDisclosure();
   const location = useLocation();
@@ -16,13 +19,30 @@ export function App() {
   });
 
   const [profile, setProfile] = useState<any>(null);
+  const [helpDrawerOpen, setHelpDrawerOpen] = useState(false);
+  const [helpQueueCount, setHelpQueueCount] = useState(0);
+
+  // Poll help queue count
+  const fetchQueueCount = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/helpQueue`);
+      const data = await res.json();
+      setHelpQueueCount((data.queue || []).length);
+    } catch { /* backend down */ }
+  }, []);
+
+  useEffect(() => {
+    fetchQueueCount();
+    const interval = setInterval(fetchQueueCount, 5000);
+    return () => clearInterval(interval);
+  }, [fetchQueueCount]);
 
   useEffect(() => {
     const fetchProfile = async () => {
       if (value && value !== '?') {
         console.log('Fetching profile for:', value);
         try {
-          const response = await fetch(`http://localhost:8000/profile/${value}`);
+          const response = await fetch(`${BACKEND_URL}/profile/${value}`);
           const data = await response.json();
           console.log('Profile fetch response:', data);
           if (data.status === 'success' && data.profile) {
@@ -60,10 +80,15 @@ export function App() {
               </div>
               {showProfile && (
                 <Group ml="xl" gap={10} visibleFrom="sm">
+                  <Indicator label={helpQueueCount} size={18} color="red" disabled={helpQueueCount === 0} offset={4}>
+                    <Button size="compact-sm" variant="light" color="red" onClick={() => setHelpDrawerOpen(true)}>
+                      Help Requests
+                    </Button>
+                  </Indicator>
                   {profile && profile.photo ? (
                     <Group gap={8}>
-                      <img 
-                        src={profile.photo} 
+                      <img
+                        src={profile.photo}
                         alt={profile.name}
                         style={{
                           width: 32,
@@ -94,13 +119,27 @@ export function App() {
               path="/editor"
               element={ <Editor/> }
             />
-              <Route
+            <Route
+              path="/help"
+              element={ <HelpRequests/> }
+            />
+            <Route
               path="/draw"
               element={ <CollaborativeFlow id={value}/> }
             />
           </Routes>
         </AppShell.Main>
       </AppShell>
+      <Drawer
+        opened={helpDrawerOpen}
+        onClose={() => setHelpDrawerOpen(false)}
+        title="Help Requests"
+        position="right"
+        size="md"
+        overlayProps={{ backgroundOpacity: 0.15 }}
+      >
+        <HelpRequestsPanel onQueueUpdate={setHelpQueueCount} />
+      </Drawer>
     </div>
   );
 }

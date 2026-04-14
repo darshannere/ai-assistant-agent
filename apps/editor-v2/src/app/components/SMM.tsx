@@ -27,7 +27,7 @@ const jumpToFunction = (nodeId) => {
 };
 
 
-const backendServer = 'localhost';
+import { BACKEND_URL, WS_URL } from '../config';
 
 
 // --- Dagre Layout Setup ---
@@ -124,8 +124,9 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
         const initialNodes = initialNodeIds.map(id => ({
             id: id,
             data: { label: id },
-            position: { x: 0, y: 0 }, 
-            className: 'unchecked', 
+            position: { x: 0, y: 0 },
+            className: 'unchecked',
+            hidden: true, // Start hidden; revealed when task is completed/tested
             style: { width: nodeWidth, height: nodeHeight, textAlign: 'center', display: 'flex', justifyContent: 'center', alignItems: 'center' }, // Basic styling
         }));
 
@@ -133,7 +134,8 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
             id: `e${i}-${link.source}-${link.target}`,
             source: link.source,
             target: link.target,
-            markerEnd: { 
+            hidden: true, // Start hidden; revealed when connected nodes are visible
+            markerEnd: {
                 type: MarkerType.ArrowClosed,
             },
             // type: 'smoothstep', // Optional: Use smoothstep edges
@@ -156,15 +158,16 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
 
     // Fetch initial participant states on mount
     useEffect(() => {
-        fetch(`http://${backendServer}:8000/debug/states`)
+        fetch(`${BACKEND_URL}/debug/states`)
             .then((r) => r.json())
             .then((data) => setParticipantStates(data.participantStates || {}))
             .catch((e) => console.warn("Failed to fetch participant states:", e));
     }, []);
 
+
     useEffect(() => {
         if (!ws.current || ws.current.readyState === WebSocket.CLOSED) {
-            const wsUrl = `ws://${backendServer}:8000/ws/${storedUserId}`;
+            const wsUrl = `${WS_URL}/ws/${storedUserId}`;
             console.log(`Attempting to connect WebSocket: ${wsUrl}`);
             ws.current = new WebSocket(wsUrl);
 
@@ -203,28 +206,47 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
                         console.log("Received graph update:", graphStatus, "participantStates:", states);
                         setParticipantStates(states);
 
+                        // Collect which nodes should be visible (have a status > 0)
+                        const visibleNodeIds = new Set<string>();
+                        for (const [nodeId, status] of Object.entries(graphStatus)) {
+                            if (status && (status as number) > 0) visibleNodeIds.add(nodeId);
+                        }
+
                         setNodes((currentNodes) =>
                             currentNodes.map((node) => {
                                 const status = graphStatus[node.id];
-                                let newClassName = 'unchecked'; 
+                                let newClassName = 'unchecked';
+                                let shouldShow = false;
                                 if (status === 1) {
                                     newClassName = 'checked1';
+                                    shouldShow = true;
                                 } else if (status === 2) {
                                     newClassName = 'checked2';
+                                    shouldShow = true;
                                 }
 
-                                // Only return a new object if the class actually changes
-                                // React Flow needs immutable updates to detect changes
-                                if (node.className !== newClassName) {
-                                     console.log(`Updating node ${node.id} className to ${newClassName}`);
+                                if (node.className !== newClassName || node.hidden !== !shouldShow) {
+                                    console.log(`Updating node ${node.id} className to ${newClassName}, hidden=${!shouldShow}`);
                                     return {
                                         ...node,
                                         className: newClassName,
-                                        data: { ...node.data }, // Preserve tooltip data and other node data
-                                        style: { ...node.style } // Preserve node style
+                                        hidden: !shouldShow,
+                                        data: { ...node.data },
+                                        style: { ...node.style }
                                     };
                                 }
-                                return node; 
+                                return node;
+                            })
+                        );
+
+                        // Reveal edges where both source and target are visible
+                        setEdges((currentEdges) =>
+                            currentEdges.map((edge) => {
+                                const shouldShow = visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target);
+                                if (edge.hidden !== !shouldShow) {
+                                    return { ...edge, hidden: !shouldShow };
+                                }
+                                return edge;
                             })
                         );
                     }
@@ -304,7 +326,7 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
             );
 
             try {
-                const response = await fetch(`http://${backendServer}:8000/lookup/${node.id}`);
+                const response = await fetch(`${BACKEND_URL}/lookup/${node.id}`);
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
                 console.log(`Tooltip data for ${node.id}:`, data);

@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './puzzleStyles.css'; 
+import { BACKEND_URL, WS_URL } from '../config';
 const puzzleNodeIds = [
   "Customer", "Restaurant",
   "view_menu", "create_order",  "inventory_helper", "restock_inventory",
@@ -112,12 +113,11 @@ export default function PuzzleApp({id}: DrawProps) {
   });
   const allEdges = useMemo(() => [...correctEdges, ...incorrectEdges], [correctEdges, incorrectEdges]);
   const wsRef = useRef<WebSocket | null>(null);
-  const backendServer = "localhost";
   useEffect(() => {
     console.log(id)
     if(id && !wsRef.current) {
       console.log(`Raw value from localStorage: "${id}"`);    
-        const wsUrl = `ws://${backendServer}:8000/ws/${id}`;
+        const wsUrl = `${WS_URL}/ws/${id}`;
         console.log("WebSocket URL:", wsUrl);
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
@@ -202,7 +202,7 @@ export default function PuzzleApp({id}: DrawProps) {
         try {
           const completedTime = 0; // Replace with actual time
           const remainingTime = 0; // Replace with actual time
-          const url = `http://${backendServer}:8000/DrawDone?id=${encodeURIComponent(id)}&completed_time=${completedTime}&remaining_time=${remainingTime}`;
+          const url = `${BACKEND_URL}/DrawDone?id=${encodeURIComponent(id)}&completed_time=${completedTime}&remaining_time=${remainingTime}`;
           const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -275,4 +275,3 @@ export default function PuzzleApp({id}: DrawProps) {
     </div>
   );
 }
-

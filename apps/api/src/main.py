@@ -18,7 +18,7 @@ from collections import ChainMap, defaultdict
 import json
 import study_problem_sol
 from datetime import datetime, timedelta
-from fastapi_utilities import repeat_every
+import time as _time
 import google.generativeai as genai
 from openai import OpenAI
 app = FastAPI()
@@ -305,12 +305,13 @@ class EditorManager:
         self.individual = {}
         self.profiles = {}
         self.help_queue = []
+        self.active_help_sessions: List[Dict] = []  # tracks who is helping whom
         self.participant_concepts: Dict[str, List[str]] = {}  # accumulated concepts per participant
         # client = genai.Client(api_key="")
         # self.client = client
         client = OpenAI(
-            api_key="",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+            api_key="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",
+            base_url="https://openrouter.ai/api/v1"
         )
         self.client = client
         # openai.api_key = ""
@@ -500,7 +501,7 @@ class EditorManager:
     def get_open_ai_response(self, prompt=""):
         self.message_history.append({"role": "user", "content": prompt})
         response= self.client.chat.completions.create(
-            model="gemini-2.0-flash",
+            model="google/gemini-2.0-flash-001",
             messages=self.message_history,
             temperature=0,
             max_tokens=1500,
@@ -699,7 +700,9 @@ class FunctionReplacer:
 
             # # Print sanitized output preserving newlines
             # print("\n".join(clean_lines))
-            print(result.stdout)           
+            print(result.stdout)
+            if result.stderr:
+                print(f"stderr: {result.stderr[:500]}")
             if not self.test_full:
                 match = re.search(
                     r"=+ (\d+) passed.*(?:, (\d+) failed)?", result.stdout
@@ -707,12 +710,20 @@ class FunctionReplacer:
                 passed = int(match.group(1)) if match else 0
                 passed_match = re.search(r"(\d+)\s+passed", result.stdout)
                 pass_final= int(passed_match.group(1)) if passed_match else 0
-                
+
                 selected_match = re.search(
                     r"collected (\d+) items / (\d+) deselected / (\d+) selected",
                     result.stdout,
                 )
                 total_selected = int(selected_match.group(3)) if selected_match else 0
+
+                # Fallback: if no deselected line, try "collected N items" directly
+                if total_selected == 0 and pass_final > 0:
+                    collected_match = re.search(r"collected (\d+) items?\b", result.stdout)
+                    if collected_match:
+                        total_selected = int(collected_match.group(1))
+                        print(f"Fallback: used 'collected N items' → total_selected={total_selected}")
+
                 await graph_manager.update_completed(
                     node_id=self.function_name,
                     completed=pass_final,
@@ -720,7 +731,7 @@ class FunctionReplacer:
                 )
                 print(
                     f"Completed {pass_final} out of {total_selected} tests for {self.function_name}"
-      
+
                 )
             # test = self.parse_pytest_output(result.stdout)
             # print(test)
@@ -743,6 +754,92 @@ graph_manager = GraphManager()
 editor_manager = EditorManager()
 
 profile_manager = ProfileManager()
+
+# --- Keyword-to-concept mapping for detecting concepts from code ---
+# Maps Python keywords/patterns to the concept names used in functions.csv
+KEYWORD_TO_CONCEPTS = {
+    # Looping
+    "while": ["Looping", "Looping (while loop)"],
+    "for": ["Looping"],
+    # Conditionals
+    "if": ["Conditional Statement (If-else)", "Conditional (if-else)", "Conditional Statements", "Conditional", "Conditional Statement (if-else)"],
+    "elif": ["Conditional Statement (If-else)", "Conditional (if-else)", "Conditional", "Conditional Statement (if-else)"],
+    "else": ["Conditional Statement (If-else)", "Conditional (if-else)", "Conditional", "Conditional Statement (if-else)"],
+    # Dictionary
+    "dict": ["Dictionary concepts", "Dictionary Operation", "Dictionary Operations", "Dictionary Lookup", "Dictionary iteration"],
+    # List
+    "list": ["List Operations", "List concepts"],
+    "append": ["List Operations", "List concepts"],
+    "remove": ["List Operations", "List concepts"],
+    "pop": ["List Operations", "List concepts"],
+    # String interpolation
+    ".format(": ["String Interpolation"],
+    # Tuple
+    "tuple": ["Tuple"],
+    # Function calling
+    "def": ["Function Calling"],
+    # Random
+    "random": ["Random num generation"],
+    # Object init
+    "class": ["Object initialization"],
+    "__init__": ["Object initialization"],
+}
+
+# All unique concept names in our system (normalized for matching)
+ALL_CONCEPTS = set()
+for node in graph_manager.graph.values():
+    for c in node.concepts.split(","):
+        c = c.strip()
+        if c:
+            ALL_CONCEPTS.add(c)
+
+
+def detect_concepts_from_code(code: str) -> list[str]:
+    """Detect programming concepts from code using keyword matching."""
+    detected = set()
+    code_lower = code.lower()
+    for keyword, concepts in KEYWORD_TO_CONCEPTS.items():
+        # Use word boundary check for short keywords to avoid false positives
+        if len(keyword) <= 3:
+            # Check as a standalone token (preceded by whitespace/start, followed by whitespace/punctuation)
+            if re.search(r'(?:^|[\s(.])' + re.escape(keyword) + r'(?:[\s(:"\']|$)', code_lower):
+                detected.update(concepts)
+        else:
+            if keyword.lower() in code_lower:
+                detected.update(concepts)
+    # f-string detection (f"..." or f'...')
+    if re.search(r'''f["']''', code):
+        detected.add("String Interpolation")
+    return list(detected)
+
+
+def find_helper_for_concepts(requester_id: str, concepts: list[str]) -> dict | None:
+    """Find ONE helper who has completed a task with matching concepts.
+    Returns the best match (most overlapping concepts) or None."""
+    requester_id = requester_id.replace('"', '')
+    best_match = None
+    best_count = 0
+
+    for other_id, their_concepts in editor_manager.participant_concepts.items():
+        if other_id.replace('"', '') == requester_id:
+            continue
+        matching = set(concepts) & set(their_concepts)
+        if matching and len(matching) > best_count:
+            best_count = len(matching)
+            other_profile = profile_manager.get_profile(other_id.replace('"', ''))
+            best_match = {
+                "helperId": other_id.replace('"', ''),
+                "helperName": other_profile.name if other_profile else other_id,
+                "helperPhoto": other_profile.photo if other_profile else None,
+                "concepts": list(matching),
+            }
+
+    return best_match
+
+
+# Debounce tracking: last time we ran concept detection per participant
+_last_concept_detect: Dict[str, float] = {}
+CONCEPT_DETECT_COOLDOWN = 3.0  # seconds
 
 msgs = []
 state = ""
@@ -803,7 +900,22 @@ async def start_help_session(body: HelpRequest):
         await socketManager.broadcast(json.dumps(event))
         print("Starting help session between helpee ", helpee, "and helper ", helper)
         print(event)
-        editor_manager.help_queue.pop()
+        editor_manager.help_queue.pop(0)
+        # Track the active help session
+        helper_clean = helper.replace('"', '')
+        helpee_clean = helpee.replace('"', '')
+        helper_profile = profile_manager.get_profile(helper_clean)
+        helpee_profile = profile_manager.get_profile(helpee_clean)
+        editor_manager.active_help_sessions.append({
+            "helperId": helper_clean,
+            "helperName": helper_profile.name if helper_profile else helper_clean,
+            "helperPhoto": helper_profile.photo if helper_profile else None,
+            "helpeeId": helpee_clean,
+            "helpeeName": helpee_profile.name if helpee_profile else helpee_clean,
+            "helpeePhoto": helpee_profile.photo if helpee_profile else None,
+            "duration": time * 60,
+            "startedAt": int(_time.time()),
+        })
         print(editor_manager.help_queue)
         return {"status": "success"}
 
@@ -943,15 +1055,49 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
 
             if loaded["event"] == "updatePlayground":
                 print("updating playground", editor_manager.individual, loaded)
-                editor_manager.update_individual(id, loaded["payload"]["doc"])
+                code = loaded["payload"]["doc"]
+                editor_manager.update_individual(id, code)
                 event = {
                     "event": "monitorPlayground",
                     "payload": {"editors": editor_manager.individual},
                 }
                 await socketManager.broadcast(json.dumps(event))
 
+                # Detect concepts from code and push helper suggestion (debounced)
+                now = _time.time()
+                last = _last_concept_detect.get(id, 0)
+                if now - last >= CONCEPT_DETECT_COOLDOWN:
+                    _last_concept_detect[id] = now
+                    detected = detect_concepts_from_code(code)
+                    if detected:
+                        suggestion = find_helper_for_concepts(id, detected)
+                        if suggestion:
+                            helper_event = {
+                                "event": "helperSuggestion",
+                                "payload": {
+                                    "suggestion": suggestion,
+                                    "detectedConcepts": detected,
+                                    "anchorKeyword": None,
+                                },
+                            }
+                            # Find the keyword that triggered this
+                            for kw in KEYWORD_TO_CONCEPTS:
+                                kw_lower = kw.lower()
+                                if len(kw) <= 3:
+                                    if re.search(r'(?:^|[\s(.])' + re.escape(kw_lower) + r'(?:[\s(:"\']|$)', code.lower()):
+                                        helper_event["payload"]["anchorKeyword"] = kw
+                                        break
+                                elif kw_lower in code.lower():
+                                    helper_event["payload"]["anchorKeyword"] = kw
+                                    break
+                            await socketManager.direct_message(json.dumps(helper_event), id)
+
             if loaded["event"] in ("typing", "stoppedTyping"):
                 print(f"[typing] {loaded['event']} from {id}: {loaded.get('payload', {})}")
+                await socketManager.broadcast(data)
+
+            if loaded["event"] == "helpRequest":
+                print(f"[helpRequest] from {id}: {loaded.get('payload', {})}")
                 await socketManager.broadcast(data)
 
             if loaded["event"] == "updateNode":
@@ -1081,9 +1227,26 @@ def lookup_description(node):
 async def save_profile(profile: ParticipantProfile):
     """Save participant profile to backend"""
     profile_manager.save_profile(profile)
+
+    # Demo: When participant B registers, auto-mark calculate_order_cost as completed by B
+    pid = profile.id.replace('"', '')
+    if pid == "B":
+        node = graph_manager.graph.get("calculate_order_cost")
+        if node and node.work_status != 2:
+            node.claimed_by = pid
+            node.work_status = 2
+            node.completed = node.total or 1
+            node.total = node.total or 1
+            # Seed B's accumulated concepts so helper suggestions work
+            concepts = [c.strip() for c in node.concepts.split(",") if c.strip()]
+            existing = editor_manager.participant_concepts.get(pid, [])
+            editor_manager.participant_concepts[pid] = list(
+                dict.fromkeys(existing + concepts)
+            )
+
     work_statuses = [
-        {node: graph_manager.graph[node].work_status}
-        for node in graph_manager.graph
+        {node_name: graph_manager.graph[node_name].work_status}
+        for node_name in graph_manager.graph
     ]
     event = {
         "event": "updateGraph",
@@ -1139,6 +1302,118 @@ def get_helper_suggestions(participant_id: str):
             })
 
     return {"suggestions": suggestions, "currentTask": current_task, "taskConcepts": task_concepts}
+
+
+def _ai_detect_concepts(code: str) -> list[str]:
+    """Synchronous AI concept detection — run via asyncio.to_thread to avoid blocking."""
+    concept_list = ", ".join(ALL_CONCEPTS)
+    prompt = (
+        f"Given this Python code snippet, identify which programming concepts from this list are being used: [{concept_list}]. "
+        f"Return ONLY a JSON array of matching concept names, nothing else.\n\nCode:\n```\n{code}\n```"
+    )
+    response = editor_manager.client.chat.completions.create(
+        model="google/gemini-2.0-flash-001",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    ai_text = response.choices[0].message.content.strip()
+    if "```" in ai_text:
+        ai_text = ai_text.split("```json")[-1] if "```json" in ai_text else ai_text.split("```")[1]
+        ai_text = ai_text.split("```")[0].strip()
+    if ai_text.startswith("["):
+        ai_concepts = json.loads(ai_text)
+        return [c for c in ai_concepts if c in ALL_CONCEPTS]
+    return []
+
+
+@app.post("/detectHelper")
+async def detect_helper_from_code(body: dict):
+    """Detect concepts from code and find ONE helper who can assist.
+    POST { "participant_id": "A", "code": "while x > 0:\\n    ..." }
+
+    1. Keyword scan the code for known concept patterns
+    2. If no keyword match, use AI to detect concepts
+    3. Find the best single helper who has completed matching concepts
+    """
+    participant_id = body.get("participant_id", "").replace('"', '')
+    code = body.get("code", "")
+
+    if not code or not participant_id:
+        return {"suggestion": None, "detectedConcepts": []}
+
+    # Step 1: keyword-based concept detection
+    detected = detect_concepts_from_code(code)
+
+    # Step 2: if no keywords matched, try AI detection (non-blocking)
+    if not detected and len(code.strip()) > 20:
+        try:
+            detected = await asyncio.to_thread(_ai_detect_concepts, code)
+        except Exception as e:
+            print(f"[detectHelper] AI concept detection failed: {e}")
+
+    if not detected:
+        return {"suggestion": None, "detectedConcepts": []}
+
+    # Step 3: find ONE helper
+    suggestion = find_helper_for_concepts(participant_id, detected)
+
+    return {
+        "suggestion": suggestion,
+        "detectedConcepts": detected,
+    }
+
+
+@app.get("/helpQueue")
+def get_help_queue():
+    """Return the current help queue with enriched participant data."""
+    queue_items = []
+    for entry in editor_manager.help_queue:
+        # help_queue entries can be (id, helpType) tuples or bare id strings
+        if isinstance(entry, tuple):
+            pid, help_type = entry[0], entry[1]
+        else:
+            pid, help_type = entry, "quick"
+        pid_clean = pid.replace('"', '')
+        profile = profile_manager.get_profile(pid_clean)
+        # Find what task this participant is working on
+        current_task = (
+            editor_manager.profiles.get(f'"{pid_clean}"', '')
+            or editor_manager.profiles.get(pid_clean, '')
+        )
+        task_concepts = []
+        if current_task and current_task in graph_manager.graph:
+            task_concepts = [
+                c.strip()
+                for c in graph_manager.graph[current_task].concepts.split(",")
+                if c.strip()
+            ]
+        queue_items.append({
+            "id": pid_clean,
+            "name": profile.name if profile else pid_clean,
+            "photo": profile.photo if profile else None,
+            "helpType": help_type,
+            "currentTask": current_task or None,
+            "taskConcepts": task_concepts,
+        })
+
+    # Also return all connected participant IDs (excluding control)
+    connected = [
+        conn.id.replace('"', '')
+        for conn in socketManager.connections
+        if conn.id != "control"
+    ]
+
+    # Clean up expired sessions (older than duration + 30s buffer)
+    now = int(_time.time())
+    editor_manager.active_help_sessions = [
+        s for s in editor_manager.active_help_sessions
+        if now - s["startedAt"] < s["duration"] + 30
+    ]
+
+    return {
+        "queue": queue_items,
+        "connectedParticipants": connected,
+        "activeSessions": editor_manager.active_help_sessions,
+    }
 
 
 @app.get("/profiles")
@@ -1240,18 +1515,27 @@ async def helpMe(body: ReplyBody):
             await ws.send_text(json.dumps(broadcast_event))
 
 
+async def _monitor_progress_loop():
+    while True:
+        await asyncio.sleep(10)
+        try:
+            for key, value in graph_manager.graph.items():
+                if (
+                    value.start_time is not None
+                    and get_time_diff(value.start_time) > 150
+                    and value.work_status == 1
+                    and len([t for t in editor_manager.help_queue if t[0] ==
+                             value.claimed_by]) == 0
+                ):
+                    await editor_manager.send_notification(value.claimed_by, "", False)
+                    graph_manager.graph[key].start_time = datetime.now()
+        except Exception as e:
+            print(f"[monitor_progress] error: {e}")
+
+
 @app.on_event("startup")
-@repeat_every(seconds=10)
-async def monitor_progress():
-    for key, value in graph_manager.graph.items():
-        if (
-            get_time_diff(value.start_time) > 150
-            and value.work_status == 1
-            and len([t for t in editor_manager.help_queue if t[0] ==
-                     value.claimed_by]) == 0
-        ):
-            await editor_manager.send_notification(value.claimed_by, "", False)
-            graph_manager.graph[key].start_time = datetime.now()
+async def startup_event():
+    asyncio.create_task(_monitor_progress_loop())
 
 
 class Chat(BaseModel):

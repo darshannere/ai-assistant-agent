@@ -64,3 +64,5 @@ virtualenv==20.29.1
 watchfiles==1.0.4
 websockets==14.2
 yarl==1.18.3
+google-generativeai==0.8.6
+openai==2.21.0

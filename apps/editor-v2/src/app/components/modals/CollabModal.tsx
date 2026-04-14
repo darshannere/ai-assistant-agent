@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './CollabModal.css'; // Assuming this file exists
+import { BACKEND_URL } from '../../config';
 // Removed unused import: import { Background } from '@xyflow/react'; // If not used, it can be removed. Add back if needed.
 
 const CollaborativeOpportunityModal = ({ onClose, predictions, context, id, helpeeProfile }) => {
@@ -26,11 +27,11 @@ const CollaborativeOpportunityModal = ({ onClose, predictions, context, id, help
     },
   };
 
-  const backendServer = 'localhost'; // Note: For client-side fetch, 'prime-lab.cs.vt.edu' might not be the intended server address. Consider 'localhost' or a specific IP/domain.
+  // URL from config
 
   const startHelpSession = async (helper, time, hint = 'this is hint') => {
     try {
-      const response = await fetch(`http://${backendServer}:8000/StartHelpSession`, {
+      const response = await fetch(`${BACKEND_URL}/StartHelpSession`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

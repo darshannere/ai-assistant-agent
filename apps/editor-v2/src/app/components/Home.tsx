@@ -2,6 +2,7 @@ import { readLocalStorageValue, useDisclosure, useViewportSize,  } from '@mantin
 import { Button, Title, Text, Stack, SimpleGrid, Dialog, TextInput, FileInput, Group, Image, Box } from "@mantine/core"
 import { Link, useNavigate } from 'react-router-dom';
 import { useState, useRef } from 'react';
+import { BACKEND_URL } from '../config';
 
 interface HomeProps {
   setValue: Function
@@ -108,7 +109,7 @@ export default function Home({setValue}: HomeProps) {
       
       // Save to backend
       try {
-        const response = await fetch('http://localhost:8000/profile', {
+        const response = await fetch(`${BACKEND_URL}/profile`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(profile)

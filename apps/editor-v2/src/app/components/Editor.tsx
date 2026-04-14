@@ -17,30 +17,50 @@ import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarke
 import { Extension, StateField, EditorState, RangeSetBuilder } from "@codemirror/state";
 import { createPersonalEditorUpdateExtension } from './modals/extension';
 import HelpSessionStartedModal from './modals/HelpSessionModal';
+import { BACKEND_URL, WS_URL, SIGNALING_URL } from '../config';
 
 // --- Inline Help Widget (shows "X can help with Y" badge inline in code) ---
 class InlineHelpWidget extends WidgetType {
-  constructor(private readonly text: string) { super(); }
+  constructor(private readonly text: string, private readonly mode: 'suggestion' | 'pending' = 'suggestion') { super(); }
   toDOM() {
-    const span = document.createElement("span");
-    span.style.marginLeft = "8px";
-    span.style.padding = "2px 8px";
-    span.style.borderRadius = "999px";
-    span.style.background = "#16a34a";
-    span.style.border = "1px solid #15803d";
-    span.style.color = "#ffffff";
-    span.style.fontSize = "11px";
-    span.style.fontWeight = "700";
-    span.style.lineHeight = "1.2";
-    span.style.boxShadow = "0 1px 2px rgba(0, 0, 0, 0.2)";
-    span.style.cursor = "default";
-    span.textContent = this.text;
-    return span;
+    const btn = document.createElement("button");
+    btn.style.marginLeft = "12px";
+    btn.style.padding = "4px 12px";
+    btn.style.borderRadius = "6px";
+    btn.style.border = "none";
+    btn.style.fontSize = "13px";
+    btn.style.fontWeight = "600";
+    btn.style.lineHeight = "1.4";
+    btn.style.verticalAlign = "middle";
+    btn.style.fontFamily = "inherit";
+
+    if (this.mode === 'pending') {
+      btn.style.background = "#f59e0b";
+      btn.style.color = "#ffffff";
+      btn.style.cursor = "default";
+      btn.style.boxShadow = "0 1px 3px rgba(0, 0, 0, 0.15)";
+      btn.textContent = `🧑‍💻 ${this.text}`;
+    } else {
+      btn.style.background = "#1f2937";
+      btn.style.color = "#ffffff";
+      btn.style.cursor = "pointer";
+      btn.style.boxShadow = "0 2px 6px rgba(0, 0, 0, 0.25)";
+      btn.textContent = `🧑‍💻 ${this.text}`;
+      btn.addEventListener("mouseenter", () => { btn.style.background = "#374151"; });
+      btn.addEventListener("mouseleave", () => { btn.style.background = "#1f2937"; });
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        document.dispatchEvent(new CustomEvent("inline-help-click"));
+      });
+    }
+    return btn;
   }
-  ignoreEvent() { return true; }
+  eq(other: InlineHelpWidget) { return this.text === other.text && this.mode === other.mode; }
+  ignoreEvent() { return false; }
 }
 
-function buildInlineHelpDecoration(state: EditorState, message: string, anchorText: string) {
+function buildInlineHelpDecoration(state: EditorState, message: string, anchorText: string, mode: 'suggestion' | 'pending' = 'suggestion') {
   if (!anchorText) return Decoration.none;
   const doc = state.doc.toString();
   const anchor = doc.indexOf(anchorText);
@@ -48,18 +68,18 @@ function buildInlineHelpDecoration(state: EditorState, message: string, anchorTe
   const anchorEnd = anchor + anchorText.length;
   return Decoration.set([
     Decoration.widget({
-      widget: new InlineHelpWidget(message),
+      widget: new InlineHelpWidget(message, mode),
       side: 1,
     }).range(anchorEnd),
   ]);
 }
 
-function createInlineHelpField(message: string, anchorText: string) {
+function createInlineHelpField(message: string, anchorText: string, mode: 'suggestion' | 'pending' = 'suggestion') {
   return StateField.define({
-    create(state) { return buildInlineHelpDecoration(state, message, anchorText); },
+    create(state) { return buildInlineHelpDecoration(state, message, anchorText, mode); },
     update(decorations, tr) {
       if (!tr.docChanged) return decorations.map(tr.changes);
-      return buildInlineHelpDecoration(tr.state, message, anchorText);
+      return buildInlineHelpDecoration(tr.state, message, anchorText, mode);
     },
     provide: (f) => EditorView.decorations.from(f),
   });
@@ -124,7 +144,7 @@ export default function Editor() {
   const [helpOption, setHelpOption] = useState<string | null>(null);
   const [history, setHistory] = useState([]);
   const [personalCode, setPersonalCode] = useState("# Hello world\nprint('hello world')");
-  const backendServer = "localhost";
+  // backendServer replaced by config imports — see top of file
   const wsRef = useRef<WebSocket | null>(null);
   const id = localStorage.getItem('participant-id') || 'D';
   const storedUserId = id.replace(/"/g, '');
@@ -152,8 +172,18 @@ export default function Editor() {
   // Other participants' personal editor code
   const [otherEditors, setOtherEditors] = useState<Record<string, string>>({});
 
-  // Inline help extension for the personal editor
+  // Inline help extension for the personal editor (driven by backend helperSuggestion events)
   const [inlineHelpExtension, setInlineHelpExtension] = useState<Extension[]>([]);
+
+  // State for the inline help popup card (triggered by clicking the inline widget)
+  const [inlineHelpCardOpen, setInlineHelpCardOpen] = useState(false);
+  const [inlineHelpRequested, setInlineHelpRequested] = useState(false);
+
+  // Current suggestion from backend (used to populate the popup card)
+  const [currentSuggestion, setCurrentSuggestion] = useState<{
+    helperId: string; helperName: string; helperPhoto: string | null; concepts: string[];
+  } | null>(null);
+  const [currentAnchorKeyword, setCurrentAnchorKeyword] = useState<string | null>(null);
 
   // Proactive helper suggestions (inline widgets in helpee's editor)
   const [helperSuggestions, setHelperSuggestions] = useState<Array<{
@@ -174,7 +204,7 @@ export default function Editor() {
     // Skip non-function nodes (like "Customer", "Restaurant")
     if (nodeId === 'Customer' || nodeId === 'Restaurant') return;
     try {
-      const res = await fetch(`http://${backendServer}:8000/task/${nodeId}`);
+      const res = await fetch(`${BACKEND_URL}/task/${nodeId}`);
       const data = await res.json();
       if (data.status === 'ok') {
         setSelectedTask(data);
@@ -184,33 +214,45 @@ export default function Editor() {
     } catch (e) {
       console.error('Failed to fetch task details:', e);
     }
-  }, [backendServer]);
+  }, []);
 
-  // Fetch helper suggestions periodically
+  // Listen for clicks on the inline help widget button
   useEffect(() => {
-    const fetchSuggestions = async () => {
-      try {
-        const res = await fetch(`http://${backendServer}:8000/helperSuggestions/${storedUserId}`);
-        const data = await res.json();
-        if (data.suggestions && data.suggestions.length > 0) {
-          setHelperSuggestions(data.suggestions);
-          // Build inline help extensions for each suggestion, anchored to `pass` in the code
-          const fields = data.suggestions.map((s: any) =>
-            createInlineHelpField(
-              `${s.helperName} can help with ${s.concepts[0]}`,
-              "pass"
-            )
-          );
-          setInlineHelpExtension(fields);
-        }
-      } catch (e) {
-        // Backend might not be running, silently ignore
+    const handler = () => {
+      if (!inlineHelpRequested) {
+        setInlineHelpCardOpen(true);
       }
     };
-    fetchSuggestions();
-    const interval = setInterval(fetchSuggestions, 15000);
-    return () => clearInterval(interval);
-  }, [storedUserId, backendServer]);
+    document.addEventListener("inline-help-click", handler);
+    return () => document.removeEventListener("inline-help-click", handler);
+  }, [inlineHelpRequested]);
+
+  // Handle "Help Me When Free" from the inline help card
+  const inlineDismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleInlineHelpRequest = () => {
+    setInlineHelpCardOpen(false);
+    setInlineHelpRequested(true);
+    // Swap the inline widget to orange "will ping when free" mode
+    const helperName = currentSuggestion?.helperName || 'Helper';
+    const anchor = currentAnchorKeyword || 'pass';
+    setInlineHelpExtension([
+      createInlineHelpField(`${helperName} will ping when free`, anchor, "pending"),
+    ]);
+    // Auto-dismiss after 5 seconds
+    if (inlineDismissTimer.current) clearTimeout(inlineDismissTimer.current);
+    inlineDismissTimer.current = setTimeout(() => {
+      setInlineHelpExtension([]);
+      setInlineHelpRequested(false);
+    }, 5000);
+    // Send help request via WebSocket (existing mechanism)
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        event: 'helpRequest',
+        payload: { helpeeId: storedUserId, helpeeName: storedUserId, helpeePhoto: null }
+      }));
+    }
+  };
 
   function handleCollabModalOpen() { setCollabModalOpen(true); }
   function handleCollabModalClose() { setCollabModalOpen(false); }
@@ -273,7 +315,7 @@ export default function Editor() {
   useEffect(() => {
     if (storedUserId && !wsRef.current) {
       console.log(`Raw value from localStorage: "${storedUserId}"`);
-      const wsUrl = `ws://${backendServer}:8000/ws/${storedUserId}`;
+      const wsUrl = `${WS_URL}/ws/${storedUserId}`;
       console.log("WebSocket URL:", wsUrl);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -344,8 +386,29 @@ export default function Editor() {
         }
         if (data['event'] === 'helpRequest') {
           const { helpeeId, helpeeName, helpeePhoto } = data['payload'];
-          setIncomingHelpRequest({ helpeeId, helpeeName, helpeePhoto });
-          setHelpCardVisible(true);
+          // Only show to other participants, not the one who sent it
+          if (helpeeId !== storedUserId) {
+            setIncomingHelpRequest({ helpeeId, helpeeName, helpeePhoto });
+            setHelpCardVisible(true);
+          }
+        }
+        if (data['event'] === 'helperSuggestion') {
+          const { suggestion, detectedConcepts, anchorKeyword } = data['payload'];
+          if (suggestion && !inlineHelpRequested) {
+            setCurrentSuggestion(suggestion);
+            setCurrentAnchorKeyword(anchorKeyword || detectedConcepts[0] || 'pass');
+            const anchor = anchorKeyword || 'pass';
+            const conceptLabel = detectedConcepts[0] || 'this';
+            setInlineHelpExtension([
+              createInlineHelpField(
+                `${suggestion.helperName} can help with ${conceptLabel}`,
+                anchor,
+                "suggestion"
+              ),
+            ]);
+            // Auto-dismiss inline help badge after 3 seconds
+            setTimeout(() => setInlineHelpExtension([]), 3000);
+          }
         }
         if (data['event'] === 'typing') {
           const { id: tid, editor } = data['payload'];
@@ -379,7 +442,7 @@ export default function Editor() {
   async function testCodePlayground() {
     const code = personalCode;
     const channel = storedUserId;
-    await fetch(`http://${backendServer}:8000/testFunction`, {
+    await fetch(`${BACKEND_URL}/testFunction`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: code, channel: channel }),
@@ -396,7 +459,7 @@ export default function Editor() {
     const code = personalCode;
     const channel = storedUserId;
     try {
-      await fetch(`http://${backendServer}:8000/test`, {
+      await fetch(`${BACKEND_URL}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: code, channel: channel }),
@@ -420,7 +483,7 @@ export default function Editor() {
   const helpMe = () => {
     setHelpRequested(true);
     openHelp();
-    fetch(`http://${backendServer}:8000/helpMe`, {
+    fetch(`${BACKEND_URL}/helpMe`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: id, choice: "Help", text: "" }),
@@ -439,8 +502,12 @@ export default function Editor() {
     setInlineHelpExtension([]);
   };
 
-  const copyTeamToPersonal = () => {
-    setPersonalCode(ytext.toString());
+  const copyLeftToPersonal = () => {
+    if (activeTab === 'team') {
+      setPersonalCode(ytext.toString());
+    } else if (activeTab && otherEditors[activeTab]) {
+      setPersonalCode(otherEditors[activeTab]);
+    }
   };
 
   const copyPersonalToTeam = () => {
@@ -561,8 +628,8 @@ export default function Editor() {
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 4, padding: '0 2px' }}>
                   <span style={{ fontSize: 10, fontWeight: 600, color: '#888', userSelect: 'none' }}>Copy</span>
                   <button
-                    title="Copy Left Editor to My Editor"
-                    onClick={(e) => { e.stopPropagation(); copyTeamToPersonal(); }}
+                    title={activeTab === 'team' ? "Copy Team Editor to My Editor" : `Copy ${activeTab}'s Editor to My Editor`}
+                    onClick={(e) => { e.stopPropagation(); copyLeftToPersonal(); }}
                     className={styles.copyArrowBtn}
                   >
                     &rarr;
@@ -571,6 +638,8 @@ export default function Editor() {
                     title="Copy My Editor to Team Editor"
                     onClick={(e) => { e.stopPropagation(); copyPersonalToTeam(); }}
                     className={styles.copyArrowBtn}
+                    disabled={activeTab !== 'team'}
+                    style={activeTab !== 'team' ? { opacity: 0.3, cursor: 'not-allowed' } : {}}
                   >
                     &larr;
                   </button>
@@ -712,6 +781,49 @@ export default function Editor() {
                           mt={4}
                           fullWidth
                           onClick={() => setSelectedHelper(null)}
+                        >
+                          Close
+                        </Button>
+                      </div>
+                    )}
+                    {/* Inline help popup card (triggered by clicking inline helper button) */}
+                    {inlineHelpCardOpen && currentSuggestion && (
+                      <div className={styles.helperCard} style={{ minWidth: 220 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                          {currentSuggestion.helperPhoto ? (
+                            <img src={currentSuggestion.helperPhoto} alt={currentSuggestion.helperName}
+                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '3px solid #ef4444' }} />
+                          ) : (
+                            <span style={{ fontSize: 28 }}>🧑‍💻</span>
+                          )}
+                          <div>
+                            <div style={{ fontSize: 15, fontWeight: 700 }}>{currentSuggestion.helperName}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
+                              <span style={{
+                                display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
+                                background: '#ef4444',
+                              }} />
+                              <span style={{ fontSize: 13, color: '#ef4444', fontWeight: 600 }}>Deep Work</span>
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          size="compact-sm"
+                          color="orange"
+                          mt={10}
+                          fullWidth
+                          onClick={handleInlineHelpRequest}
+                          style={{ fontWeight: 600 }}
+                        >
+                          Help Me When Free
+                        </Button>
+                        <Button
+                          size="compact-sm"
+                          variant="default"
+                          mt={6}
+                          fullWidth
+                          onClick={() => setInlineHelpCardOpen(false)}
+                          style={{ fontWeight: 500 }}
                         >
                           Close
                         </Button>
@@ -881,7 +993,7 @@ export default function Editor() {
 // Y.js Collaboration Extension
 const ydoc = new Y.Doc();
 const provider = new WebrtcProvider('prime-collab-room-demo', ydoc, {
-  signaling: ['ws://localhost:4444'],
+  signaling: [SIGNALING_URL],
   peerOpts: {
     config: {
       iceServers: [

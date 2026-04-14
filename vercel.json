@@ -1,0 +1,9 @@
+{
+  "buildCommand": "npx nx build editor-v2",
+  "outputDirectory": "dist/apps/editor-v2",
+  "installCommand": "npm install",
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

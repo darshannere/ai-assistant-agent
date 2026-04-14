@@ -51,3 +51,4 @@ apps/api/src/__pycache__/*
 *.pem
 
 .cursor/mcp.json
+.vercel

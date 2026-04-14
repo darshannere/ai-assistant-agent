@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import './HelpModal.css'; // We'll create this CSS file next
 import { repositionTooltips } from '@uiw/react-codemirror';
+import { BACKEND_URL } from '../../config';
 
 function HelpModal({ isOpen, onClose, id }) {
   const [selectedOption, setSelectedOption] = useState(null);
-  const backendServer='localhost'
 
   if (!isOpen) {
     return null; // Don't render the modal if it's not open
@@ -15,7 +15,7 @@ function HelpModal({ isOpen, onClose, id }) {
   };
 
   const handleSubmit = () => {
-    fetch(`http://${backendServer}:8000/replyToHelp`, {
+    fetch(`${BACKEND_URL}/replyToHelp`, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
