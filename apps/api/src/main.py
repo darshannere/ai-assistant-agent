@@ -839,7 +839,7 @@ def find_helper_for_concepts(requester_id: str, concepts: list[str]) -> dict | N
 
 # Debounce tracking: last time we ran concept detection per participant
 _last_concept_detect: Dict[str, float] = {}
-CONCEPT_DETECT_COOLDOWN = 3.0  # seconds
+CONCEPT_DETECT_COOLDOWN = 1.0  # seconds
 
 msgs = []
 state = ""
@@ -971,6 +971,7 @@ async def testFunction(rawCode: InputBody):
         replacer.restore_main_file()
 
     sys.stdout = sys.__stdout__
+    sys.stderr = sys.__stderr__
 
     event = {
         "event": "run",
@@ -982,6 +983,20 @@ async def testFunction(rawCode: InputBody):
         await socketManager.broadcast(json.dumps(event))
     else:
         await socketManager.direct_message(json.dumps(event), rawCode.channel)
+
+    # Re-broadcast graph state after test (ensures nodes update in real-time)
+    work_statuses = [
+        {node: graph_manager.graph[node].work_status}
+        for node in graph_manager.graph
+    ]
+    graph_event = {
+        "event": "updateGraph",
+        "payload": {
+            "graph": dict(ChainMap(*work_statuses)),
+            "participantStates": get_participant_states(),
+        },
+    }
+    await socketManager.broadcast(json.dumps(graph_event))
 
     return Response(content=buffer.getvalue(), media_type="text/plain")
 

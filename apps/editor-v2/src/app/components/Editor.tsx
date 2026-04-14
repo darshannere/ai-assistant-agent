@@ -406,8 +406,8 @@ export default function Editor() {
                 "suggestion"
               ),
             ]);
-            // Auto-dismiss inline help badge after 3 seconds
-            setTimeout(() => setInlineHelpExtension([]), 3000);
+            // Auto-dismiss inline help badge after 10 seconds
+            setTimeout(() => setInlineHelpExtension([]), 10000);
           }
         }
         if (data['event'] === 'typing') {
