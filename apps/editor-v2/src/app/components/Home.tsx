@@ -208,13 +208,6 @@ export default function Home({setValue}: HomeProps) {
           >
             Goto Editor
           </Button>
-          <Button 
-            mt={10} 
-            disabled={!selected}
-            onClick={() => navigate('/draw', { state: { id: selected } })}
-          >
-            Goto Draw
-          </Button>
         </Stack>
       </Stack>
 
