@@ -165,6 +165,12 @@ const runIconGutterTheme = EditorView.theme({
 const ALL_PARTICIPANTS = ['A', 'B', 'C'];
 type HistoryEntry = [Date, string, boolean];
 type ParticipantProfile = { name: string; photo: string | null };
+type FunctionRange = {
+  from: number;
+  to: number;
+  text: string;
+  name: string;
+};
 type RemoteCursor = {
   userId: string;
   name: string;
@@ -193,6 +199,50 @@ function getParticipantColor(participantId: string) {
 
 function clampPosition(pos: number, max: number) {
   return Math.max(0, Math.min(pos, max));
+}
+
+function getFunctionRanges(code: string): FunctionRange[] {
+  const lines = code.split('\n');
+  const lineStarts: number[] = [];
+  let offset = 0;
+
+  for (const line of lines) {
+    lineStarts.push(offset);
+    offset += line.length + 1;
+  }
+
+  const functionHeaders = lines.flatMap((line, index) => {
+    const match = line.match(/^def\s+([A-Za-z_]\w*)\s*\(/);
+    if (!match) return [];
+    return [{
+      lineIndex: index,
+      from: lineStarts[index],
+      name: match[1],
+    }];
+  });
+
+  return functionHeaders.map((header, index) => {
+    const end = index + 1 < functionHeaders.length ? functionHeaders[index + 1].from : code.length;
+    return {
+      from: header.from,
+      to: end,
+      text: code.slice(header.from, end).trimEnd(),
+      name: header.name,
+    };
+  });
+}
+
+function getFunctionAtPosition(code: string, position: number): FunctionRange | null {
+  const functionRanges = getFunctionRanges(code);
+  const clampedPosition = clampPosition(position, code.length);
+
+  for (const range of functionRanges) {
+    if (clampedPosition >= range.from && clampedPosition <= range.to) {
+      return range;
+    }
+  }
+
+  return functionRanges.find((range) => clampedPosition < range.from) || null;
 }
 
 class RemoteCursorWidget extends WidgetType {
@@ -406,6 +456,9 @@ export default function Editor() {
   const [remoteTeamCursors, setRemoteTeamCursors] = useState<RemoteCursor[]>([]);
   const suppressTeamSyncRef = useRef(false);
   const participantProfilesRef = useRef<Record<string, ParticipantProfile>>({});
+  const teamEditorViewRef = useRef<EditorView | null>(null);
+  const personalEditorViewRef = useRef<EditorView | null>(null);
+  const leftEditorViewRefs = useRef<Record<string, EditorView | null>>({});
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
 
@@ -685,17 +738,41 @@ export default function Editor() {
   };
 
   const copyLeftToPersonal = () => {
-    if (activeTab === 'team') {
-      setPersonalCode(ytext.toString());
-    } else if (activeTab && otherEditors[activeTab]) {
-      setPersonalCode(otherEditors[activeTab]);
+    if (!activeTab) return;
+
+    const sourceView = leftEditorViewRefs.current[activeTab];
+    const sourceCode = activeTab === 'team' ? ytext.toString() : otherEditors[activeTab];
+    if (!sourceView || !sourceCode) return;
+
+    const sourceFunction = getFunctionAtPosition(sourceCode, sourceView.state.selection.main.head);
+    if (!sourceFunction) {
+      console.warn('No active function found to copy from the left editor.');
+      return;
     }
+
+    setPersonalCode((prev) => {
+      const trimmedPrev = prev.trimEnd();
+      const separator = trimmedPrev.length > 0 ? '\n\n' : '';
+      return `${trimmedPrev}${separator}${sourceFunction.text}\n`;
+    });
   };
 
   const copyPersonalToTeam = () => {
-    const current = ytext.toString();
-    ytext.delete(0, current.length);
-    ytext.insert(0, personalCode);
+    const personalView = personalEditorViewRef.current;
+    const teamView = teamEditorViewRef.current;
+    const currentTeamCode = ytext.toString();
+    if (!personalView || !teamView) return;
+
+    const sourceFunction = getFunctionAtPosition(personalCode, personalView.state.selection.main.head);
+    const targetFunction = getFunctionAtPosition(currentTeamCode, teamView.state.selection.main.head);
+
+    if (!sourceFunction || !targetFunction) {
+      console.warn('Unable to find both source and target functions for copy-to-team.');
+      return;
+    }
+
+    ytext.delete(targetFunction.from, targetFunction.to - targetFunction.from);
+    ytext.insert(targetFunction.from, `${sourceFunction.text}\n\n`);
   };
 
   const formatTime = (seconds: number) => {
@@ -769,6 +846,10 @@ export default function Editor() {
                     <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
                       <CodeMirror
                         height="100%"
+                        onCreateEditor={(view) => {
+                          teamEditorViewRef.current = view;
+                          leftEditorViewRefs.current.team = view;
+                        }}
                         extensions={[
                           python(),
                           yCollab(ytext, undefined),
@@ -842,6 +923,9 @@ export default function Editor() {
                             height="100%"
                             value={otherEditors[p]}
                             editable={false}
+                            onCreateEditor={(view) => {
+                              leftEditorViewRefs.current[p] = view;
+                            }}
                             extensions={[python(), runIconField, runIconGutter, runIconGutterTheme]}
                             style={{ height: '100%', opacity: 0.9 }}
                           />
@@ -922,6 +1006,9 @@ export default function Editor() {
                     <CodeMirror
                       height="100%"
                       value={personalCode}
+                      onCreateEditor={(view) => {
+                        personalEditorViewRef.current = view;
+                      }}
                       onChange={(value) => { setPersonalCode(value); sendTypingEvent('personal'); }}
                       extensions={[
                         ...personalEditorExtensions,
