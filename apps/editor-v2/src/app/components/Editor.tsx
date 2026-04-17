@@ -894,7 +894,7 @@ export default function Editor() {
         )}
 
         <PanelGroup direction="vertical">
-          <Panel defaultSize={50} minSize={20}>
+          <Panel defaultSize={70} minSize={20}>
             <PanelGroup direction="horizontal">
               {/* LEFT SIDE: Tabs (Team Editor + other participants) */}
               <Panel defaultSize={50} minSize={20}>
@@ -1276,7 +1276,7 @@ export default function Editor() {
           <PanelResizeHandle />
 
           {/* Bottom: Graph + Output */}
-          <Panel defaultSize={50} minSize={20}>
+          <Panel defaultSize={30} minSize={20}>
             <PanelGroup direction="horizontal">
               <Panel defaultSize={50}>
                 <div style={{ padding: '10px' }}>

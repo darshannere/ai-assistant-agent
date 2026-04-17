@@ -109,10 +109,7 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
     const [edges, setEdges, onEdgesChange] = useEdgesState<Edge[]>([]);
     const ws = useRef<WebSocket | null>(null); 
     const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-
-    const [tooltipContent, setTooltipContent] = useState<string | null>(null);
-    const [tooltipPosition, setTooltipPosition] = useState<{ x: number, y: number } | null>(null);
-    const [tooltipVisible, setTooltipVisible] = useState<boolean>(false);
+    
     const [participantStates, setParticipantStates] = useState<Record<string, { status: string; name: string; photo?: string; currentTasks?: string[] }>>({});
     const [participantHoverId, setParticipantHoverId] = useState<string | null>(null);
     const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
