@@ -1204,6 +1204,13 @@ def get_task_details(node):
     }
 
 
+@app.get("/study-problem-template")
+def get_study_problem_template():
+    with open("study_problem_blank.py", "r") as file:
+        starter_code = file.read()
+    return {"status": "ok", "starter_code": starter_code}
+
+
 @app.get("/lookup/{node}")
 def lookup_description(node):
     if node in graph_manager.graph:
