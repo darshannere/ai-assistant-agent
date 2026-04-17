@@ -531,8 +531,13 @@ export default function Editor() {
           }
         }
         if (data['event'] === 'document_update') {
+          const updateSourceUser = typeof data?.payload?.user === 'string'
+            ? data.payload.user.replace(/"/g, '')
+            : null;
           const nextDoc = typeof data?.payload?.doc === 'string' ? data.payload.doc : ytext.toString();
-          if (nextDoc !== ytext.toString()) {
+          const isRemoteDocumentChange = updateSourceUser !== storedUserId;
+
+          if (isRemoteDocumentChange && nextDoc !== ytext.toString()) {
             suppressTeamSyncRef.current = true;
             ytext.delete(0, ytext.length);
             ytext.insert(0, nextDoc);
