@@ -169,8 +169,6 @@ function createRunIconGutter(onRunFunction?: (functionCode: string) => void) {
   });
 }
 
-const passiveRunIconGutter = createRunIconGutter();
-
 const runIconGutterTheme = EditorView.theme({
   ".cm-run-icon-gutter": { width: "22px" },
 });
@@ -543,6 +541,13 @@ export default function Editor() {
     [testSingleFunction]
   );
 
+  const sharedRunIconGutter = useMemo(
+    () => createRunIconGutter((functionCode) => {
+      void testSingleFunction(functionCode);
+    }),
+    [testSingleFunction]
+  );
+
   // Help session countdown timer (helpee side)
   useEffect(() => {
     if (!helpSessionActive || helpSessionTimeLeft <= 0) return;
@@ -886,7 +891,7 @@ export default function Editor() {
                           python(),
                           yCollab(ytext, undefined),
                           runIconField,
-                          passiveRunIconGutter,
+                          sharedRunIconGutter,
                           runIconGutterTheme,
                           ...remoteCursorExtension,
                           ViewPlugin.fromClass(class {
@@ -958,7 +963,7 @@ export default function Editor() {
                             onCreateEditor={(view) => {
                               leftEditorViewRefs.current[p] = view;
                             }}
-                            extensions={[python(), runIconField, passiveRunIconGutter, runIconGutterTheme]}
+                            extensions={[python(), runIconField, sharedRunIconGutter, runIconGutterTheme]}
                             style={{ height: '100%', opacity: 0.9 }}
                           />
                         ) : (
