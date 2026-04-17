@@ -151,11 +151,25 @@ const runIconField = StateField.define({
   },
 });
 
-const runIconGutter = gutter({
-  class: "cm-run-icon-gutter",
-  markers: (view) => view.state.field(runIconField),
-  initialSpacer: () => runIconMarker,
-});
+function createRunIconGutter(onRunFunction?: (functionCode: string) => void) {
+  return gutter({
+    class: "cm-run-icon-gutter",
+    markers: (view) => view.state.field(runIconField),
+    initialSpacer: () => runIconMarker,
+    domEventHandlers: onRunFunction ? {
+      mousedown(view, line) {
+        const lineText = view.state.doc.lineAt(line.from).text;
+        if (!/^\s*def\s+\w+\s*\(/.test(lineText)) return false;
+        const activeFunction = getFunctionAtPosition(view.state.doc.toString(), line.from);
+        if (!activeFunction) return false;
+        onRunFunction(activeFunction.text);
+        return true;
+      },
+    } : undefined,
+  });
+}
+
+const passiveRunIconGutter = createRunIconGutter();
 
 const runIconGutterTheme = EditorView.theme({
   ".cm-run-icon-gutter": { width: "22px" },
@@ -237,7 +251,7 @@ function getFunctionAtPosition(code: string, position: number): FunctionRange | 
   const clampedPosition = clampPosition(position, code.length);
 
   for (const range of functionRanges) {
-    if (clampedPosition >= range.from && clampedPosition <= range.to) {
+    if (clampedPosition >= range.from && clampedPosition < range.to) {
       return range;
     }
   }
@@ -513,6 +527,22 @@ export default function Editor() {
     [remoteTeamCursors]
   );
 
+  const testSingleFunction = useCallback(async (functionCode: string) => {
+    const channel = storedUserId;
+    await fetch(`${BACKEND_URL}/testFunction`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: functionCode, channel }),
+    });
+  }, [storedUserId]);
+
+  const personalRunIconGutter = useMemo(
+    () => createRunIconGutter((functionCode) => {
+      void testSingleFunction(functionCode);
+    }),
+    [testSingleFunction]
+  );
+
   // Help session countdown timer (helpee side)
   useEffect(() => {
     if (!helpSessionActive || helpSessionTimeLeft <= 0) return;
@@ -697,14 +727,16 @@ export default function Editor() {
   }
 
   async function testCodePlayground() {
-    const code = personalCode;
-    const channel = storedUserId;
-    await fetch(`${BACKEND_URL}/testFunction`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: code, channel: channel }),
-    });
-    console.log("testing personal code:", code);
+    const functionsToTest = getFunctionRanges(personalCode);
+    if (functionsToTest.length === 0) {
+      console.warn("No top-level functions found in personal editor to test.");
+      return;
+    }
+
+    for (const fn of functionsToTest) {
+      await testSingleFunction(fn.text);
+    }
+    console.log("testing personal code sequentially:", functionsToTest.map((fn) => fn.name));
   }
 
   function mergeCollaborativeCode() {
@@ -854,7 +886,7 @@ export default function Editor() {
                           python(),
                           yCollab(ytext, undefined),
                           runIconField,
-                          runIconGutter,
+                          passiveRunIconGutter,
                           runIconGutterTheme,
                           ...remoteCursorExtension,
                           ViewPlugin.fromClass(class {
@@ -926,7 +958,7 @@ export default function Editor() {
                             onCreateEditor={(view) => {
                               leftEditorViewRefs.current[p] = view;
                             }}
-                            extensions={[python(), runIconField, runIconGutter, runIconGutterTheme]}
+                            extensions={[python(), runIconField, passiveRunIconGutter, runIconGutterTheme]}
                             style={{ height: '100%', opacity: 0.9 }}
                           />
                         ) : (
@@ -1013,7 +1045,7 @@ export default function Editor() {
                       extensions={[
                         ...personalEditorExtensions,
                         runIconField,
-                        runIconGutter,
+                        personalRunIconGutter,
                         runIconGutterTheme,
                         ...inlineHelpExtension,
                       ]}
