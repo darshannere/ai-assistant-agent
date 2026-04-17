@@ -1,18 +1,15 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
-import { Button, Title, Container, Group, Modal, Tabs, Badge, Drawer, Text, Code, Divider } from "@mantine/core"
-import { useDisclosure } from '@mantine/hooks';
+import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider } from "@mantine/core"
 import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import ReactAnsi from "react-ansi";
 import { WebrtcProvider } from 'y-webrtc';
-import HelpModal from './modals/HelpModal';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import GraphComponent from './SMM';
 import { ReactFlowProvider } from '@xyflow/react';
-import CollaborativeOpportunityModal from './modals/CollabModal';
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
 import { Extension, StateField, EditorState, RangeSetBuilder } from "@codemirror/state";
 import { createPersonalEditorUpdateExtension } from './modals/extension';
@@ -106,13 +103,42 @@ class RunIconMarker extends GutterMarker {
 
 const runIconMarker = new RunIconMarker();
 
+function updateTripleQuoteState(lineText: string, currentState: `'''` | `"""` | null) {
+  let state = currentState;
+  for (let i = 0; i < lineText.length; i += 1) {
+    const quote = lineText.slice(i, i + 3);
+    if (!state) {
+      if ((quote === `'''` || quote === `"""`) && lineText[i - 1] !== "\\") {
+        state = quote as `'''` | `"""`;
+        i += 2;
+      }
+      continue;
+    }
+
+    if (quote === state && lineText[i - 1] !== "\\") {
+      state = null;
+      i += 2;
+    }
+  }
+  return state;
+}
+
 function buildRunIconMarkers(state: EditorState) {
   const builder = new RangeSetBuilder<GutterMarker>();
+  let tripleQuoteState: `'''` | `"""` | null = null;
+
   for (let lineNo = 1; lineNo <= state.doc.lines; lineNo += 1) {
     const line = state.doc.line(lineNo);
-    if (/^\s*def\s+\w+\s*\(/.test(line.text)) {
+    const lineText = line.text;
+    const trimmedLine = lineText.trimStart();
+    const isDefinitionLine = !tripleQuoteState && /^\s*def\s+\w+\s*\(/.test(lineText);
+    const isCommentLine = trimmedLine.startsWith("#");
+
+    if (isDefinitionLine && !isCommentLine) {
       builder.add(line.from, line.from, runIconMarker);
     }
+
+    tripleQuoteState = updateTripleQuoteState(lineText, tripleQuoteState);
   }
   return builder.finish();
 }
@@ -137,26 +163,18 @@ const runIconGutterTheme = EditorView.theme({
 
 // --- All Participants ---
 const ALL_PARTICIPANTS = ['A', 'B', 'C'];
+type HistoryEntry = [Date, string, boolean];
 
 export default function Editor() {
-  const [opened, { open, close }] = useDisclosure(false);
-  const [helpOpened, { open: openHelp, close: closeHelp }] = useDisclosure(false);
-  const [helpOption, setHelpOption] = useState<string | null>(null);
-  const [history, setHistory] = useState([]);
-  const [personalCode, setPersonalCode] = useState("# Hello world\nprint('hello world')");
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [personalCode, setPersonalCode] = useState("");
   // backendServer replaced by config imports — see top of file
   const wsRef = useRef<WebSocket | null>(null);
   const id = localStorage.getItem('participant-id') || 'D';
   const storedUserId = id.replace(/"/g, '');
-  const [collabData, setCollabData] = useState([]);
-  const [isCollabModalOpen, setCollabModalOpen] = useState(false);
-  const [context, setContext] = useState("");
-  const [helpeeProfile, setHelpeeProfile] = useState({ name: '', photo: null });
-  const [istaskopen, settaskmodalopen] = useState(false);
   const [activeTab, setActiveTab] = useState<string | null>('team');
 
   // Helpee-side state
-  const [helpRequested, setHelpRequested] = useState(false);
   const [helpSessionActive, setHelpSessionActive] = useState(false);
   const [helpSessionHelper, setHelpSessionHelper] = useState('');
   const [helpSessionTimeLeft, setHelpSessionTimeLeft] = useState(0);
@@ -254,9 +272,6 @@ export default function Editor() {
     }
   };
 
-  function handleCollabModalOpen() { setCollabModalOpen(true); }
-  function handleCollabModalClose() { setCollabModalOpen(false); }
-
   const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python()]);
   const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
   const [sessionDetails, setSessionDetails] = useState({
@@ -264,13 +279,32 @@ export default function Editor() {
     taskContext: '',
     helperName: ''
   });
-  const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<[]>([]);
+  const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<unknown[]>([]);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
-  const openTModal = () => settaskmodalopen(true);
-  const closeTModal = () => settaskmodalopen(false);
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTeamEditorStarterCode() {
+      try {
+        const response = await fetch(`${BACKEND_URL}/study-problem-template`);
+        if (!response.ok) throw new Error(`Failed to load template: ${response.status}`);
+        const data = await response.json();
+        const starterCode = data?.starter_code;
+        if (!cancelled && typeof starterCode === "string" && starterCode.length > 0 && ytext.length === 0) {
+          ytext.insert(0, starterCode);
+        }
+      } catch (error) {
+        console.error("Failed to preload Team Editor starter code:", error);
+      }
+    }
+
+    loadTeamEditorStarterCode();
+    return () => { cancelled = true; };
+  }, []);
 
   // Help session countdown timer (helpee side)
   useEffect(() => {
@@ -301,7 +335,7 @@ export default function Editor() {
   }, [storedUserId]);
 
   function extractJsons(text: string): object[] {
-    const jsonMatches = [...text.matchAll(/```json\n(.*?)\n```/gs)];
+    const jsonMatches = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)];
     return jsonMatches.map(match => {
       try { return JSON.parse(match[1].trim()); }
       catch (error) { console.error("Failed to parse JSON:", match[1]); return null; }
@@ -344,18 +378,9 @@ export default function Editor() {
           appendToHistory(data['stdout'], data['all']);
         }
         if (data['event'] === 'initial') {
-          ytext.insert(0, data['payload']['doc']);
-        }
-        if (data['event'] === 'notification') {
-          const context = data['payload']['context'];
-          const graphData = data['payload']['suggestions'];
-          const helpeeName = data['payload']['helpeeName'] || '';
-          const helpeePhoto = data['payload']['helpeePhoto'] || null;
-          console.log("Graph data:", graphData);
-          setContext(context);
-          setCollabData(graphData);
-          setHelpeeProfile({ name: helpeeName, photo: helpeePhoto });
-          handleCollabModalOpen();
+          if (ytext.length === 0 && typeof data?.payload?.doc === 'string' && data.payload.doc.length > 0) {
+            ytext.insert(0, data.payload.doc);
+          }
         }
         if (data['event'] === 'StartHelpSession') {
           const { helper, helpee, time, hint } = data['payload'];
@@ -368,7 +393,6 @@ export default function Editor() {
 
             // Helpee side: track active help session
             if (helpee === storedUserId) {
-              setHelpRequested(false);
               setHelpSessionActive(true);
               setHelpSessionHelper(helper);
               setHelpSessionTimeLeft(totalDurationSeconds);
@@ -470,31 +494,9 @@ export default function Editor() {
     }
   }
 
-  function appendToHistory(output, all) {
+  function appendToHistory(output: string, all: boolean) {
     setHistory((prev) => [...prev, [new Date(), output, all]]);
   }
-
-  function handleHelpSubmit() {
-    console.log("Help requested with option:", helpOption);
-    setHelpOption(null);
-    closeHelp();
-  }
-
-  const helpMe = () => {
-    setHelpRequested(true);
-    openHelp();
-    fetch(`${BACKEND_URL}/helpMe`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: id, choice: "Help", text: "" }),
-    })
-      .then(response => {
-        if (!response.ok) throw new Error('Network response was not ok');
-        return response.json();
-      })
-      .then(data => console.log('Help request successful:', data))
-      .catch(error => console.error('There was a problem with the help request:', error));
-  };
 
   const dismissHelpCard = () => {
     setHelpCardVisible(false);
@@ -534,14 +536,6 @@ export default function Editor() {
                 <span>Help session active with <strong>{helpSessionHelper}</strong></span>
               </Group>
               <Badge color="green" variant="filled" size="sm">{formatTime(helpSessionTimeLeft)}</Badge>
-            </Group>
-          </div>
-        )}
-        {helpRequested && !helpSessionActive && (
-          <div className={styles.helpRequestedBanner}>
-            <Group gap="xs" align="center" justify="center">
-              <span className={styles.searchingDot} />
-              <span>Looking for a helper...</span>
             </Group>
           </div>
         )}
@@ -665,9 +659,6 @@ export default function Editor() {
                       <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
                       <Button onClick={runPersonalCode} size='compact-xs'>Run</Button>
                       <Button onClick={clearCode} size='compact-xs'>Clear</Button>
-                      <Button onClick={helpMe} size='compact-xs' color={helpRequested ? 'yellow' : 'blue'}>
-                        {helpRequested ? 'Help Requested' : 'Flag for Help'}
-                      </Button>
                     </Group>
                   </Group>
                   <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
@@ -770,10 +761,9 @@ export default function Editor() {
                           fullWidth
                           onClick={() => {
                             setSelectedHelper(null);
-                            helpMe();
                           }}
                         >
-                          Help Me When Free
+                          Dismiss
                         </Button>
                         <Button
                           size="compact-xs"
@@ -892,24 +882,6 @@ export default function Editor() {
         </PanelGroup>
       </Container>
 
-      <Modal size="75%" opened={opened} onClose={close} title="Progress Tree" centered>
-        <div style={{ width: "100%", height: 500 }}>
-          <ReactFlowProvider>
-            <GraphComponent onNodeSelect={handleNodeSelect} />
-          </ReactFlowProvider>
-        </div>
-      </Modal>
-
-      {isCollabModalOpen && (
-        <CollaborativeOpportunityModal
-          onClose={handleCollabModalClose}
-          predictions={collabData}
-          context={context}
-          id={storedUserId}
-          helpeeProfile={helpeeProfile}
-        />
-      )}
-
       {isSessionStartedModalOpen && (
         <HelpSessionStartedModal
           isOpen={isSessionStartedModalOpen}
@@ -919,15 +891,6 @@ export default function Editor() {
           helperName={sessionDetails.helperName}
         />
       )}
-
-      <HelpModal
-        isOpen={helpOpened}
-        id={storedUserId}
-        onClose={() => {
-          closeHelp();
-          setHelpOption(null);
-        }}
-      />
 
       {/* LeetCode-style Task Detail Drawer */}
       <Drawer
