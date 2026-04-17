@@ -28,6 +28,7 @@ const jumpToFunction = (nodeId) => {
 
 
 import { BACKEND_URL, WS_URL } from '../config';
+import ParticipantLabel from './ParticipantLabel';
 
 
 // --- Dagre Layout Setup ---
@@ -374,8 +375,16 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
                                 const editorLabel = editor === 'team' ? 'Team Editor' : 'Personal Editor';
                                 return (
                                     <div key={uid} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                                        {ps?.photo && <img src={ps.photo} alt={displayName} style={{ width: 16, height: 16, borderRadius: '50%', objectFit: 'cover' }} />}
-                                        <span><b>{displayName}</b> is typing in {editorLabel}...</span>
+                                        <span>
+                                            <ParticipantLabel
+                                                id={uid}
+                                                name={displayName}
+                                                photo={ps?.photo || null}
+                                                avatarSize={16}
+                                                textSize={12}
+                                                suffix={` is typing in ${editorLabel}...`}
+                                            />
+                                        </span>
                                     </div>
                                 );
                             })}

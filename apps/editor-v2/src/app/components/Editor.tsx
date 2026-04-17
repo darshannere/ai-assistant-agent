@@ -15,6 +15,7 @@ import { Extension, StateField, EditorState, RangeSetBuilder } from "@codemirror
 import { createPersonalEditorUpdateExtension } from './modals/extension';
 import HelpSessionStartedModal from './modals/HelpSessionModal';
 import { BACKEND_URL, WS_URL, SIGNALING_URL } from '../config';
+import ParticipantLabel from './ParticipantLabel';
 
 // --- Inline Help Widget (shows "X can help with Y" badge inline in code) ---
 class InlineHelpWidget extends WidgetType {
@@ -164,6 +165,7 @@ const runIconGutterTheme = EditorView.theme({
 // --- All Participants ---
 const ALL_PARTICIPANTS = ['A', 'B', 'C'];
 type HistoryEntry = [Date, string, boolean];
+type ParticipantProfile = { name: string; photo: string | null };
 
 export default function Editor() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -282,8 +284,50 @@ export default function Editor() {
   const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<unknown[]>([]);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
+  const [participantProfiles, setParticipantProfiles] = useState<Record<string, ParticipantProfile>>({});
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
+
+  useEffect(() => {
+    const localProfiles = ALL_PARTICIPANTS.reduce<Record<string, ParticipantProfile>>((acc, participantId) => {
+      const rawProfile = localStorage.getItem(`participant_${participantId}`);
+      if (!rawProfile) return acc;
+      try {
+        const parsed = JSON.parse(rawProfile);
+        acc[participantId] = {
+          name: parsed?.name || participantId,
+          photo: parsed?.photo || null,
+        };
+      } catch (error) {
+        console.warn(`Failed to parse local profile for ${participantId}:`, error);
+      }
+      return acc;
+    }, {});
+
+    setParticipantProfiles(localProfiles);
+
+    fetch(`${BACKEND_URL}/profiles`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (data.status !== 'success' || !data.profiles) return;
+        const backendProfiles = Object.entries(data.profiles).reduce<Record<string, ParticipantProfile>>((acc, [participantId, profile]: [string, any]) => {
+          const cleanId = participantId.replace(/"/g, '');
+          acc[cleanId] = {
+            name: profile?.name || cleanId,
+            photo: profile?.photo || null,
+          };
+          return acc;
+        }, {});
+        setParticipantProfiles((prev) => ({ ...prev, ...backendProfiles }));
+      })
+      .catch((error) => {
+        console.warn('Failed to load participant profiles:', error);
+      });
+  }, []);
+
+  const getParticipantProfile = useCallback((participantId: string) => {
+    return participantProfiles[participantId] || { name: participantId, photo: null };
+  }, [participantProfiles]);
 
   // Help session countdown timer (helpee side)
   useEffect(() => {
@@ -526,7 +570,14 @@ export default function Editor() {
                     </Tabs.Tab>
                     {otherParticipants.map(p => (
                       <Tabs.Tab key={p} value={p}>
-                        {p}'s Editor
+                        <ParticipantLabel
+                          id={p}
+                          name={getParticipantProfile(p).name}
+                          photo={getParticipantProfile(p).photo}
+                          suffix="'s Editor"
+                          avatarSize={18}
+                          textSize={13}
+                        />
                         {typingUsers[p] && <span className={styles.typingDot} />}
                       </Tabs.Tab>
                     ))}
@@ -537,7 +588,16 @@ export default function Editor() {
                     <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
                       <Group gap="xs" align="center">
                         {Object.entries(typingUsers).filter(([, ed]) => ed === 'team').map(([uid]) => (
-                          <span key={uid} className={styles.typingIndicator}>{uid} is typing...</span>
+                          <span key={uid} className={styles.typingIndicator}>
+                            <ParticipantLabel
+                              id={uid}
+                              name={getParticipantProfile(uid).name}
+                              photo={getParticipantProfile(uid).photo}
+                              suffix=" is typing..."
+                              avatarSize={16}
+                              textSize={12}
+                            />
+                          </span>
                         ))}
                       </Group>
                     </Group>
@@ -579,9 +639,27 @@ export default function Editor() {
                     <Tabs.Panel key={p} value={p} style={{ flexGrow: 1, display: activeTab === p ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
                       <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
                         <Group gap="xs" align="center">
-                          <Title order={4}>{p}'s Personal Editor</Title>
+                          <Title order={4}>
+                            <ParticipantLabel
+                              id={p}
+                              name={getParticipantProfile(p).name}
+                              photo={getParticipantProfile(p).photo}
+                              suffix="'s Personal Editor"
+                              avatarSize={20}
+                              textSize={18}
+                            />
+                          </Title>
                           {typingUsers[p] && (
-                            <span className={styles.typingIndicator}>{p} is typing...</span>
+                            <span className={styles.typingIndicator}>
+                              <ParticipantLabel
+                                id={p}
+                                name={getParticipantProfile(p).name}
+                                photo={getParticipantProfile(p).photo}
+                                suffix=" is typing..."
+                                avatarSize={16}
+                                textSize={12}
+                              />
+                            </span>
                           )}
                         </Group>
                       </Group>
@@ -633,9 +711,27 @@ export default function Editor() {
                 <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
                   <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
                     <Group gap="xs" align="center">
-                      <Title order={3}>My Editor ({storedUserId})</Title>
+                      <Title order={3}>
+                        <ParticipantLabel
+                          id={storedUserId}
+                          name={getParticipantProfile(storedUserId).name}
+                          photo={getParticipantProfile(storedUserId).photo}
+                          suffix="'s Personal Editor"
+                          avatarSize={22}
+                          textSize={20}
+                        />
+                      </Title>
                       {Object.entries(typingUsers).filter(([, ed]) => ed === 'personal').map(([uid]) => (
-                        <span key={uid} className={styles.typingIndicator}>{uid} is typing...</span>
+                        <span key={uid} className={styles.typingIndicator}>
+                          <ParticipantLabel
+                            id={uid}
+                            name={getParticipantProfile(uid).name}
+                            photo={getParticipantProfile(uid).photo}
+                            suffix=" is typing..."
+                            avatarSize={16}
+                            textSize={12}
+                          />
+                        </span>
                       ))}
                       {helpSessionActive && (
                         <Badge color="green" variant="dot" size="sm">
