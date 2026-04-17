@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Card, Code, Group, Modal, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Button, Card, Code, Group, Modal, ScrollArea, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
 import { BACKEND_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
 
@@ -51,6 +51,21 @@ export default function ConceptDashboard() {
     concept: string;
     evidence: ConceptEvidence[];
   } | null>(null);
+  const [selectedReferenceConcept, setSelectedReferenceConcept] = useState<{
+    functionName: string;
+    concept: string;
+    solutionReference: string;
+  } | null>(null);
+  const [manualEditTarget, setManualEditTarget] = useState<{
+    participantId: string;
+    participantName: string;
+    concept: string;
+    entry: ConceptEvidence;
+  } | null>(null);
+  const [teamEditorCode, setTeamEditorCode] = useState('');
+  const [selectedLineStart, setSelectedLineStart] = useState<number | null>(null);
+  const [selectedLineEnd, setSelectedLineEnd] = useState<number | null>(null);
+  const [savingManualEdit, setSavingManualEdit] = useState(false);
 
   const fetchDashboardData = useCallback(async () => {
     const [debugResponse, conceptMapResponse] = await Promise.all([
@@ -67,6 +82,7 @@ export default function ConceptDashboard() {
     setActiveProfiles(debugData.activeProfiles || {});
     setFunctionConcepts(conceptMapData.functions || []);
     setLastUpdated(new Date());
+    return { debugData, conceptMapData };
   }, []);
 
   useEffect(() => {
@@ -87,6 +103,67 @@ export default function ConceptDashboard() {
     ...accumulatedConcepts,
     ...activeProfiles,
   }).sort();
+
+  const openManualEdit = useCallback(async (
+    participantId: string,
+    participantName: string,
+    concept: string,
+    entry: ConceptEvidence
+  ) => {
+    const response = await fetch(`${BACKEND_URL}/team-editor-code`);
+    const data = await response.json();
+    setTeamEditorCode(data.code || '');
+    setSelectedLineStart(entry.line_start);
+    setSelectedLineEnd(entry.line_end);
+    setManualEditTarget({ participantId, participantName, concept, entry });
+  }, []);
+
+  const handleTeamLineClick = (lineNumber: number) => {
+    if (selectedLineStart === null || (selectedLineStart !== null && selectedLineEnd !== null)) {
+      setSelectedLineStart(lineNumber);
+      setSelectedLineEnd(null);
+      return;
+    }
+
+    if (selectedLineStart !== null && selectedLineEnd === null) {
+      if (lineNumber < selectedLineStart) {
+        setSelectedLineEnd(selectedLineStart);
+        setSelectedLineStart(lineNumber);
+      } else {
+        setSelectedLineEnd(lineNumber);
+      }
+    }
+  };
+
+  const handleSaveManualEdit = useCallback(async () => {
+    if (!manualEditTarget || selectedLineStart === null) return;
+    const finalEnd = selectedLineEnd ?? selectedLineStart;
+    setSavingManualEdit(true);
+    try {
+      await fetch(`${BACKEND_URL}/concept-evidence/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          participantId: manualEditTarget.participantId,
+          concept: manualEditTarget.concept,
+          function: manualEditTarget.entry.function,
+          lineStart: selectedLineStart,
+          lineEnd: finalEnd,
+          source: 'team',
+        }),
+      });
+      const refreshed = await fetchDashboardData();
+      setSelectedConcept((prev) => prev ? {
+        ...prev,
+        evidence: refreshed?.debugData?.conceptEvidence?.[manualEditTarget.participantId]?.[manualEditTarget.concept] || prev.evidence,
+      } : prev);
+      setManualEditTarget(null);
+    } catch (error) {
+      console.error('Failed to save manual concept evidence:', error);
+    } finally {
+      setSavingManualEdit(false);
+    }
+  }, [manualEditTarget, selectedLineStart, selectedLineEnd, fetchDashboardData]);
 
   return (
     <Stack gap="lg">
@@ -198,7 +275,17 @@ export default function ConceptDashboard() {
                   <Table.Td>
                     <Group gap={6}>
                       {fn.concepts.map((concept) => (
-                        <Badge key={concept.name} variant="light" color="grape">
+                        <Badge
+                          key={concept.name}
+                          variant="light"
+                          color="grape"
+                          style={{ cursor: 'pointer' }}
+                          onClick={() => setSelectedReferenceConcept({
+                            functionName: fn.name,
+                            concept: concept.name,
+                            solutionReference: concept.solution_reference,
+                          })}
+                        >
                           {concept.name}
                         </Badge>
                       ))}
@@ -244,6 +331,22 @@ export default function ConceptDashboard() {
                   <Text size="sm" c="dimmed">
                     Lines {entry.line_start}-{entry.line_end} in the inferred implementation snippet.
                   </Text>
+                  <Group justify="end">
+                    <Button
+                      size="compact-xs"
+                      variant="light"
+                      onClick={() => {
+                        void openManualEdit(
+                          selectedConcept.participantId,
+                          selectedConcept.participantName,
+                          selectedConcept.concept,
+                          entry
+                        );
+                      }}
+                    >
+                      Edit From Team Editor
+                    </Button>
+                  </Group>
                   <div>
                     <Text size="xs" tt="uppercase" fw={700} c="dimmed" mb={4}>Observed Implementation</Text>
                     <Code block style={{ whiteSpace: 'pre-wrap' }}>
@@ -266,6 +369,89 @@ export default function ConceptDashboard() {
                 No implementation evidence has been inferred for this concept yet.
               </Text>
             )}
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={selectedReferenceConcept !== null}
+        onClose={() => setSelectedReferenceConcept(null)}
+        title={selectedReferenceConcept ? `${selectedReferenceConcept.functionName} · ${selectedReferenceConcept.concept}` : ''}
+        size="lg"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            Reference solution snippet for this concept in the canonical solution mapping.
+          </Text>
+          <Code block style={{ whiteSpace: 'pre-wrap' }}>
+            {selectedReferenceConcept?.solutionReference || 'No predefined reference snippet available.'}
+          </Code>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={manualEditTarget !== null}
+        onClose={() => setManualEditTarget(null)}
+        title={
+          manualEditTarget ? `${manualEditTarget.entry.function} · ${manualEditTarget.concept}` : ''
+        }
+        size="xl"
+      >
+        {manualEditTarget && (
+          <Stack gap="md">
+            <Text size="sm" c="dimmed">
+              Click a start line and then an end line from the live Team Editor snapshot to replace the observed implementation evidence.
+            </Text>
+            <ScrollArea h={420} type="always">
+              <Stack gap={0}>
+                {teamEditorCode.split('\n').map((line, index) => {
+                  const lineNumber = index + 1;
+                  const start = selectedLineStart ?? lineNumber;
+                  const end = selectedLineEnd ?? selectedLineStart ?? lineNumber;
+                  const isSelected = selectedLineStart !== null && lineNumber >= Math.min(start, end) && lineNumber <= Math.max(start, end);
+                  return (
+                    <div
+                      key={lineNumber}
+                      onClick={() => handleTeamLineClick(lineNumber)}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '56px 1fr',
+                        gap: 12,
+                        padding: '4px 8px',
+                        cursor: 'pointer',
+                        background: isSelected ? '#e0f2fe' : 'transparent',
+                        borderRadius: 6,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      }}
+                    >
+                      <Text size="xs" c="dimmed" ta="right">{lineNumber}</Text>
+                      <Code style={{ whiteSpace: 'pre-wrap', background: 'transparent', padding: 0 }}>
+                        {line || ' '}
+                      </Code>
+                    </div>
+                  );
+                })}
+              </Stack>
+            </ScrollArea>
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">
+                {selectedLineStart !== null
+                  ? `Selected lines ${selectedLineStart}-${selectedLineEnd ?? selectedLineStart}`
+                  : 'No lines selected yet.'}
+              </Text>
+              <Group>
+                <Button variant="default" onClick={() => {
+                  setSelectedLineStart(null);
+                  setSelectedLineEnd(null);
+                }}>
+                  Reset Selection
+                </Button>
+                <Button onClick={() => { void handleSaveManualEdit(); }} loading={savingManualEdit} disabled={selectedLineStart === null}>
+                  Save Selection
+                </Button>
+              </Group>
+            </Group>
           </Stack>
         )}
       </Modal>

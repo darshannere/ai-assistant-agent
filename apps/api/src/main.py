@@ -538,6 +538,42 @@ class EditorManager:
         for function_name, function_code in parse_top_level_functions(code).items():
             self.refresh_concept_evidence(participant_id, function_name, function_code, source)
 
+    def update_concept_evidence_manual(
+        self,
+        participant_id: str,
+        concept: str,
+        function_name: str,
+        line_start: int,
+        line_end: int,
+        code: str,
+    ):
+        participant_id = normalize_participant_id(participant_id)
+        lines = code.splitlines()
+        if not lines:
+            return None
+
+        safe_start = max(1, min(line_start, len(lines)))
+        safe_end = max(safe_start, min(line_end, len(lines)))
+        snippet = "\n".join(lines[safe_start - 1:safe_end]).rstrip()
+        participant_store = self.participant_concept_evidence.setdefault(participant_id, {})
+        existing_entries = participant_store.get(concept, [])
+        solution_reference = CONCEPT_REFERENCE_TEMPLATES.get(function_name, {}).get(concept, {}).get("solution_snippet", "")
+        manual_entry = {
+            "function": function_name,
+            "code": snippet,
+            "line_start": safe_start,
+            "line_end": safe_end,
+            "source": "team-manual",
+            "updated_at": int(_time.time()),
+            "implemented_by": participant_id,
+            "solution_reference": solution_reference,
+        }
+        existing_entries = [entry for entry in existing_entries if entry.get("function") != function_name]
+        existing_entries.append(manual_entry)
+        existing_entries.sort(key=lambda entry: entry.get("updated_at", 0), reverse=True)
+        participant_store[concept] = existing_entries
+        return manual_entry
+
     def extract_json(text):
                 pattern = r'```json(.*?)```'
                 matches = re.findall(pattern, text, re.DOTALL)
@@ -1388,6 +1424,41 @@ def get_concept_map():
             for node in graph_manager.graph.values()
         ],
     }
+
+
+@app.get("/team-editor-code")
+def get_team_editor_code():
+    return {
+        "status": "ok",
+        "code": editor_manager.master or state,
+    }
+
+
+@app.post("/concept-evidence/update")
+def update_concept_evidence(body: dict):
+    participant_id = body.get("participantId", "")
+    concept = body.get("concept", "")
+    function_name = body.get("function", "")
+    line_start = int(body.get("lineStart", 1))
+    line_end = int(body.get("lineEnd", line_start))
+    source = body.get("source", "team")
+
+    if source != "team":
+        return {"status": "error", "message": "Only live Team Editor manual updates are supported."}
+
+    code = editor_manager.master or state
+    if not participant_id or not concept or not function_name or not code:
+        return {"status": "error", "message": "Missing required fields or Team Editor code is empty."}
+
+    updated_entry = editor_manager.update_concept_evidence_manual(
+        participant_id=participant_id,
+        concept=concept,
+        function_name=function_name,
+        line_start=line_start,
+        line_end=line_end,
+        code=code,
+    )
+    return {"status": "ok", "entry": updated_entry}
 
 
 @app.get("/study-problem-template")
