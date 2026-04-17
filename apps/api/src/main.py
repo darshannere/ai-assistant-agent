@@ -1221,6 +1221,21 @@ def get_task_details(node):
     }
 
 
+@app.get("/concept-map")
+def get_concept_map():
+    return {
+        "status": "ok",
+        "functions": [
+            {
+                "name": node.name,
+                "description": node.desc,
+                "concepts": [c.strip() for c in node.concepts.split(",") if c.strip()],
+            }
+            for node in graph_manager.graph.values()
+        ],
+    }
+
+
 @app.get("/study-problem-template")
 def get_study_problem_template():
     with open("study_problem_blank.py", "r") as file:

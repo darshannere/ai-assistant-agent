@@ -8,6 +8,7 @@ import Editor from "./components/Editor"
 import CollaborativeFlow from "./components/Tree2"
 import HelpRequests from "./components/HelpRequests"
 import HelpRequestsPanel from "./components/HelpRequestsPanel"
+import ConceptDashboard from "./components/ConceptDashboard"
 import { BACKEND_URL } from './config';
 export function App() {
   const [opened, { toggle }] = useDisclosure();
@@ -85,6 +86,14 @@ export function App() {
                       Help Requests
                     </Button>
                   </Indicator>
+                  <Button
+                    size="compact-sm"
+                    variant={location.pathname === '/conceptdashboard' ? 'filled' : 'light'}
+                    component={Link}
+                    to="/conceptdashboard"
+                  >
+                    Concept Dashboard
+                  </Button>
                   {profile && profile.photo ? (
                     <Group gap={8}>
                       <img
@@ -126,6 +135,10 @@ export function App() {
             <Route
               path="/draw"
               element={ <CollaborativeFlow id={value}/> }
+            />
+            <Route
+              path="/conceptdashboard"
+              element={ <ConceptDashboard /> }
             />
           </Routes>
         </AppShell.Main>
