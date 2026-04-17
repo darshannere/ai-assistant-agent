@@ -460,10 +460,15 @@ export default function Editor() {
     }, 5000);
     // Send help request via WebSocket (existing mechanism)
     const ws = wsRef.current;
+    const helpeeProfile = participantProfilesRef.current[storedUserId];
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         event: 'helpRequest',
-        payload: { helpeeId: storedUserId, helpeeName: storedUserId, helpeePhoto: null }
+        payload: {
+          helpeeId: storedUserId,
+          helpeeName: helpeeProfile?.name || storedUserId,
+          helpeePhoto: helpeeProfile?.photo || null,
+        }
       }));
     }
   };
@@ -1113,25 +1118,14 @@ export default function Editor() {
                     {helpCardVisible && incomingHelpRequest && (
                       <div className={styles.helperCard}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          {incomingHelpRequest.helpeePhoto ? (
-                            <img
-                              src={incomingHelpRequest.helpeePhoto}
-                              alt={incomingHelpRequest.helpeeName}
-                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '3px solid #ef4444' }}
-                            />
-                          ) : (
-                            <div style={{
-                              width: 36, height: 36, borderRadius: '50%', background: '#334155',
-                              color: 'white', fontWeight: 700, display: 'flex', alignItems: 'center',
-                              justifyContent: 'center', fontSize: 16, border: '3px solid #ef4444'
-                            }}>
-                              {(incomingHelpRequest.helpeeName || incomingHelpRequest.helpeeId).charAt(0)}
-                            </div>
-                          )}
                           <div>
-                            <div style={{ fontSize: 13, fontWeight: 700 }}>
-                              {incomingHelpRequest.helpeeName || incomingHelpRequest.helpeeId}
-                            </div>
+                            <ParticipantLabel
+                              id={incomingHelpRequest.helpeeId}
+                              name={incomingHelpRequest.helpeeName || incomingHelpRequest.helpeeId}
+                              photo={incomingHelpRequest.helpeePhoto || null}
+                              avatarSize={36}
+                              textSize={13}
+                            />
                             <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 600 }}>
                               Needs Help
                             </div>
@@ -1214,14 +1208,14 @@ export default function Editor() {
                     {inlineHelpCardOpen && currentSuggestion && (
                       <div className={styles.helperCard} style={{ minWidth: 220 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                          {currentSuggestion.helperPhoto ? (
-                            <img src={currentSuggestion.helperPhoto} alt={currentSuggestion.helperName}
-                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '3px solid #ef4444' }} />
-                          ) : (
-                            <span style={{ fontSize: 28 }}>🧑‍💻</span>
-                          )}
                           <div>
-                            <div style={{ fontSize: 15, fontWeight: 700 }}>{currentSuggestion.helperName}</div>
+                            <ParticipantLabel
+                              id={currentSuggestion.helperId}
+                              name={currentSuggestion.helperName}
+                              photo={currentSuggestion.helperPhoto || null}
+                              avatarSize={36}
+                              textSize={15}
+                            />
                             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
                               <span style={{
                                 display: 'inline-block', width: 8, height: 8, borderRadius: '50%',

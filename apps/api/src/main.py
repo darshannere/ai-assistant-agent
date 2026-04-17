@@ -1314,7 +1314,18 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
 
             if loaded["event"] == "helpRequest":
                 print(f"[helpRequest] from {id}: {loaded.get('payload', {})}")
-                await socketManager.broadcast(data)
+                payload = loaded.get("payload", {}) or {}
+                helpee_id = normalize_participant_id(payload.get("helpeeId", id))
+                helpee_profile = profile_manager.get_profile(helpee_id)
+                help_request_event = {
+                    "event": "helpRequest",
+                    "payload": {
+                        "helpeeId": helpee_id,
+                        "helpeeName": helpee_profile.name if helpee_profile else payload.get("helpeeName", helpee_id),
+                        "helpeePhoto": helpee_profile.photo if helpee_profile else payload.get("helpeePhoto"),
+                    },
+                }
+                await socketManager.broadcast(json.dumps(help_request_event))
 
             if loaded["event"] == "updateNode":
                 graph_manager.update_status(

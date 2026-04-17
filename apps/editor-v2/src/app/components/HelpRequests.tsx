@@ -3,6 +3,7 @@ import { Button } from '@mantine/core';
 import { useLocalStorage } from '@mantine/hooks';
 import styles from './HelpRequests.module.css';
 import { BACKEND_URL, WS_URL } from '../config';
+import ParticipantLabel from './ParticipantLabel';
 
 interface QueueItem {
   id: string;
@@ -124,17 +125,15 @@ export default function HelpRequests() {
                   key={item.id}
                   className={`${styles.card} ${isUrgent ? styles.cardUrgent : styles.cardQuick}`}
                 >
-                  {item.photo ? (
-                    <img src={item.photo} alt={item.name} className={styles.avatar} />
-                  ) : (
-                    <div className={styles.avatarPlaceholder}>
-                      {item.name.charAt(0).toUpperCase()}
-                    </div>
-                  )}
-
                   <div className={styles.cardBody}>
                     <div className={styles.cardName}>
-                      {item.name} ({item.id})
+                      <ParticipantLabel
+                        id={item.id}
+                        name={item.name}
+                        photo={item.photo}
+                        avatarSize={36}
+                        textSize={16}
+                      />
                       <span className={`${styles.helpTypeBadge} ${isUrgent ? styles.helpTypeStuck : styles.helpTypeQuick}`}>
                         {isUrgent ? 'Fully Stuck' : 'Quick Help'}
                       </span>
@@ -187,14 +186,15 @@ export default function HelpRequests() {
             const inQueue = queue.find((q) => q.id === p.id);
             return (
               <div key={p.id} className={styles.participantCard}>
-                {p.photo ? (
-                  <img src={p.photo} alt={p.name} className={styles.avatar} style={{ margin: '0 auto 8px' }} />
-                ) : (
-                  <div className={styles.avatarPlaceholder} style={{ margin: '0 auto 8px' }}>
-                    {p.name.charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div className={styles.cardName}>{p.name} ({p.id})</div>
+                <div style={{ margin: '0 auto 8px' }}>
+                  <ParticipantLabel
+                    id={p.id}
+                    name={p.name}
+                    photo={p.photo}
+                    avatarSize={36}
+                    textSize={16}
+                  />
+                </div>
                 <div className={styles.statusLabel}>
                   <span className={`${styles.statusDot} ${isOnline ? styles.statusOnline : styles.statusOffline}`} />
                   {inQueue ? (
