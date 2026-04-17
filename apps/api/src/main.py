@@ -81,14 +81,12 @@ class SocketManager:
         ws.id = id
         self.connections.append(ws)
         global state
-        conns = [conn for conn in self.connections if conn.id != "control"]
-        if len(conns) == 1 and ws.id != "control":
+        if ws.id != "control":
             with open("study_problem_blank.py", "r") as file:
-                code = file.read()
-                print(state)
-                if state == "":
-                    msg = json.dumps({"event": "initial", "payload": {"doc": code}})
-                    await self.broadcast(msg)
+                starter_code = file.read()
+            doc = state if state != "" else starter_code
+            msg = json.dumps({"event": "initial", "payload": {"doc": doc}})
+            await self.direct_message(msg, id)
 
     def disconnect(self, ws: WebSocket):
         self.connections.remove(ws)

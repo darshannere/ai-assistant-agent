@@ -285,27 +285,6 @@ export default function Editor() {
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadTeamEditorStarterCode() {
-      try {
-        const response = await fetch(`${BACKEND_URL}/study-problem-template`);
-        if (!response.ok) throw new Error(`Failed to load template: ${response.status}`);
-        const data = await response.json();
-        const starterCode = data?.starter_code;
-        if (!cancelled && typeof starterCode === "string" && starterCode.length > 0 && ytext.length === 0) {
-          ytext.insert(0, starterCode);
-        }
-      } catch (error) {
-        console.error("Failed to preload Team Editor starter code:", error);
-      }
-    }
-
-    loadTeamEditorStarterCode();
-    return () => { cancelled = true; };
-  }, []);
-
   // Help session countdown timer (helpee side)
   useEffect(() => {
     if (!helpSessionActive || helpSessionTimeLeft <= 0) return;
@@ -356,15 +335,6 @@ export default function Editor() {
 
       ws.onopen = () => {
         console.log("WebSocket connection established");
-        let payload = {
-          cursor: 0,
-          doc: ytext.toString(),
-          name: storedUserId,
-          timeStamp: new Date().getTime(),
-        }
-        console.log("Sending initial payload:", payload);
-        ws.send(JSON.stringify({ event: 'updateMaster', payload: payload }));
-
         console.log("Configuring personal editor WebSocket extension for user:", storedUserId);
         const playgroundUpdateExtension = createPersonalEditorUpdateExtension(ws, storedUserId);
         setPersonalEditorExtensions([python(), playgroundUpdateExtension]);
@@ -378,7 +348,8 @@ export default function Editor() {
           appendToHistory(data['stdout'], data['all']);
         }
         if (data['event'] === 'initial') {
-          if (ytext.length === 0 && typeof data?.payload?.doc === 'string' && data.payload.doc.length > 0) {
+          if (typeof data?.payload?.doc === 'string') {
+            ytext.delete(0, ytext.length);
             ytext.insert(0, data.payload.doc);
           }
         }
@@ -579,7 +550,24 @@ export default function Editor() {
                           runIconField,
                           runIconGutter,
                           runIconGutterTheme,
-                          ViewPlugin.fromClass(class { update(u: ViewUpdate) { if (u.docChanged) sendTypingEvent('team'); } }),
+                          ViewPlugin.fromClass(class {
+                            update(u: ViewUpdate) {
+                              if (!u.docChanged) return;
+                              sendTypingEvent('team');
+                              const ws = wsRef.current;
+                              if (ws && ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({
+                                  event: 'updateMaster',
+                                  payload: {
+                                    cursor: 0,
+                                    doc: u.state.doc.toString(),
+                                    name: storedUserId,
+                                    timeStamp: new Date().getTime(),
+                                  },
+                                }));
+                              }
+                            }
+                          }),
                         ]}
                         style={{ height: '100%' }}
                       />
