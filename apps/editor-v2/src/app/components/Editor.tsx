@@ -998,8 +998,8 @@ export default function Editor() {
                     </Group>
                     <Group gap="xs">
                       <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
-                      <Button onClick={runPersonalCode} size='compact-xs'>Run</Button>
-                      <Button onClick={clearCode} size='compact-xs'>Clear</Button>
+                      {/* <Button onClick={runPersonalCode} size='compact-xs'>Run</Button> */}
+                      <Button onClick={clearCode} size='compact-xs'>Clear Console</Button>
                     </Group>
                   </Group>
                   <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
