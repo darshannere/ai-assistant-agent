@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 import time as _time
 import google.generativeai as genai
 from openai import OpenAI
+from concept_reference_map import CONCEPT_REFERENCE_TEMPLATES
 app = FastAPI()
 
 app.add_middleware(
@@ -133,6 +134,93 @@ class SocketManager:
             self.broadcast(json.dumps({"event": "timer"}))
 
 
+def normalize_participant_id(participant_id: str) -> str:
+    return participant_id.replace('"', '')
+
+
+def parse_top_level_functions(code: str) -> Dict[str, str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return {}
+
+    function_map: Dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            source = ast.get_source_segment(code, node)
+            if source:
+                function_map[node.name] = dedent(source).strip()
+    return function_map
+
+
+def expand_matched_block(lines: List[str], start_idx: int) -> tuple[int, int]:
+    line = lines[start_idx]
+    base_indent = len(line) - len(line.lstrip())
+    end_idx = start_idx
+
+    if line.rstrip().endswith(":"):
+        for idx in range(start_idx + 1, len(lines)):
+            candidate = lines[idx]
+            if not candidate.strip():
+                end_idx = idx
+                continue
+            indent = len(candidate) - len(candidate.lstrip())
+            if indent <= base_indent:
+                break
+            end_idx = idx
+    return start_idx, end_idx
+
+
+def infer_generic_patterns(concept: str) -> List[str]:
+    generic_patterns = {
+        "String Interpolation": [r'f["\']', r"\.format\("],
+        "Looping": [r"^\s*for\b", r"^\s*while\b"],
+        "Looping (while loop)": [r"^\s*while\b"],
+        "Dictionary concepts": [r"\.items\(", r"\[[^\]]+\]"],
+        "Dictionary Operation": [r"\[[^\]]+\]"],
+        "Dictionary Operations": [r"\[[^\]]+\]"],
+        "Dictionary Lookup": [r"\[[^\]]+\]"],
+        "Dictionary iteration": [r"\.items\("],
+        "List Operations": [r"\.append\(", r"\.remove\(", r"\.pop\(", r"\.clear\("],
+        "List concepts": [r"\.append\(", r"\.remove\(", r"\.pop\(", r"\.clear\("],
+        "Conditional": [r"^\s*if\b", r"^\s*else\b"],
+        "Conditional (if-else)": [r"^\s*if\b", r"^\s*else\b"],
+        "Conditional Statements": [r"^\s*if\b", r"^\s*else\b"],
+        "Conditional Statement (If-else)": [r"^\s*if\b", r"^\s*else\b"],
+        "Conditional Statement (if-else)": [r"^\s*if\b", r"^\s*else\b"],
+        "Function Calling": [r"\b[a-zA-Z_]\w*\("],
+        "Tuple": [r"return\s*\("],
+        "Random num generation": [r"random\.\w+\(", r"randint\("],
+        "Object initialization": [r"\b[A-Z][A-Za-z_]*\("],
+    }
+    return generic_patterns.get(concept, [])
+
+
+def infer_concept_reference(function_name: str, concept: str, implementation_code: str) -> dict:
+    template = CONCEPT_REFERENCE_TEMPLATES.get(function_name, {}).get(concept, {})
+    patterns = template.get("patterns", []) or infer_generic_patterns(concept)
+    lines = implementation_code.splitlines()
+
+    for pattern in patterns:
+        for idx, line in enumerate(lines):
+            if re.search(pattern, line):
+                start_idx, end_idx = expand_matched_block(lines, idx)
+                snippet = "\n".join(lines[start_idx:end_idx + 1]).rstrip()
+                return {
+                    "line_start": start_idx + 1,
+                    "line_end": end_idx + 1,
+                    "code": snippet,
+                    "solution_reference": template.get("solution_snippet", ""),
+                }
+
+    return {
+        "line_start": 1,
+        "line_end": len(lines),
+        "code": implementation_code.strip(),
+        "solution_reference": template.get("solution_snippet", ""),
+    }
+
+
 class GraphNode:
     def __init__(self, name: str, desc: str, concepts: str, example_input: str = "", example_output: str = ""):
         self.name = name
@@ -189,6 +277,18 @@ class GraphNode:
                 editor_manager.participant_concepts[participant] = list(
                     dict.fromkeys(existing + new_concepts)  # deduplicate, preserve order
                 )
+                if participant in editor_manager.individual:
+                    editor_manager.refresh_concept_evidence_from_code(
+                        participant,
+                        editor_manager.individual[participant],
+                        source="personal",
+                    )
+                if editor_manager.master:
+                    editor_manager.refresh_concept_evidence_from_code(
+                        participant,
+                        editor_manager.master,
+                        source="team",
+                    )
                 editor_manager.message_history.append(
                     {"role": "user", "content": f"{self.name} is complete"}
                 )
@@ -317,6 +417,7 @@ class EditorManager:
         self.help_queue = []
         self.active_help_sessions: List[Dict] = []  # tracks who is helping whom
         self.participant_concepts: Dict[str, List[str]] = {}  # accumulated concepts per participant
+        self.participant_concept_evidence: Dict[str, Dict[str, List[Dict]]] = {}
         # client = genai.Client(api_key="")
         # self.client = client
         client = OpenAI(
@@ -391,11 +492,51 @@ class EditorManager:
     def update_profile(self, id, concepts):
         self.profiles[id] = state
 
-    def update_master(self, state):
+    def update_master(self, state, participant_id: Optional[str] = None):
         self.master = state
+        if participant_id:
+            self.refresh_concept_evidence_from_code(participant_id, state, source="team")
 
     def update_individual(self, id, state):
         self.individual[id] = state
+        self.refresh_concept_evidence_from_code(id, state, source="personal")
+
+    def refresh_concept_evidence(self, participant_id: str, function_name: str, function_code: str, source: str):
+        participant_id = normalize_participant_id(participant_id)
+        if function_name not in graph_manager.graph:
+            return
+
+        node = graph_manager.graph[function_name]
+        if node.work_status != 2 or normalize_participant_id(node.claimed_by) != participant_id:
+            return
+
+        concepts = [c.strip() for c in node.concepts.split(",") if c.strip()]
+        participant_store = self.participant_concept_evidence.setdefault(participant_id, {})
+        timestamp = int(_time.time())
+
+        for concept in concepts:
+            inferred_reference = infer_concept_reference(function_name, concept, function_code)
+            evidence_entry = {
+                "function": function_name,
+                "code": inferred_reference["code"],
+                "line_start": inferred_reference["line_start"],
+                "line_end": inferred_reference["line_end"],
+                "source": source,
+                "updated_at": timestamp,
+                "implemented_by": participant_id,
+                "solution_reference": inferred_reference["solution_reference"],
+            }
+
+            existing_entries = participant_store.get(concept, [])
+            existing_entries = [entry for entry in existing_entries if entry.get("function") != function_name]
+            existing_entries.append(evidence_entry)
+            existing_entries.sort(key=lambda entry: entry.get("updated_at", 0), reverse=True)
+            participant_store[concept] = existing_entries
+
+    def refresh_concept_evidence_from_code(self, participant_id: str, code: str, source: str):
+        participant_id = normalize_participant_id(participant_id)
+        for function_name, function_code in parse_top_level_functions(code).items():
+            self.refresh_concept_evidence(participant_id, function_name, function_code, source)
 
     def extract_json(text):
                 pattern = r'```json(.*?)```'
@@ -978,6 +1119,12 @@ async def testFunction(rawCode: InputBody):
         replacer = FunctionReplacer("study_problem_tester.py", "study_problem_sol.py")
         replacer.replace_function_in_file(rawCode.code)
         await replacer.run_tests(rawCode.channel)
+        editor_manager.refresh_concept_evidence(
+            rawCode.channel,
+            replacer.function_name,
+            rawCode.code,
+            source="test",
+        )
         replacer.restore_main_file()
 
     sys.stdout = sys.__stdout__
@@ -1058,6 +1205,7 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
 
                 if doc_changed:
                     state = incoming_doc
+                    editor_manager.update_master(state, id)
                 if cursor_changed:
                     cursor_positions[id] = incoming_cursor
 
@@ -1229,7 +1377,13 @@ def get_concept_map():
             {
                 "name": node.name,
                 "description": node.desc,
-                "concepts": [c.strip() for c in node.concepts.split(",") if c.strip()],
+                "concepts": [
+                    {
+                        "name": concept,
+                        "solution_reference": CONCEPT_REFERENCE_TEMPLATES.get(node.name, {}).get(concept, {}).get("solution_snippet", ""),
+                    }
+                    for concept in [c.strip() for c in node.concepts.split(",") if c.strip()]
+                ],
             }
             for node in graph_manager.graph.values()
         ],
@@ -1482,6 +1636,7 @@ def debug_states():
     return {
         "participantStates": get_participant_states(),
         "accumulatedConcepts": editor_manager.participant_concepts,
+        "conceptEvidence": editor_manager.participant_concept_evidence,
         "activeProfiles": editor_manager.profiles,
     }
 

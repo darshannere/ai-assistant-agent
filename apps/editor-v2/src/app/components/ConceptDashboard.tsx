@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Card, Group, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Card, Code, Group, Modal, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
 import { BACKEND_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
 
@@ -14,21 +14,43 @@ type ParticipantState = {
 type FunctionConcept = {
   name: string;
   description: string;
-  concepts: string[];
+  concepts: Array<{
+    name: string;
+    solution_reference: string;
+  }>;
+};
+
+type ConceptEvidence = {
+  function: string;
+  code: string;
+  line_start: number;
+  line_end: number;
+  source: string;
+  updated_at: number;
+  implemented_by: string;
+  solution_reference: string;
 };
 
 type DebugStateResponse = {
   participantStates: Record<string, ParticipantState>;
   accumulatedConcepts: Record<string, string[]>;
+  conceptEvidence: Record<string, Record<string, ConceptEvidence[]>>;
   activeProfiles: Record<string, string>;
 };
 
 export default function ConceptDashboard() {
   const [participantStates, setParticipantStates] = useState<Record<string, ParticipantState>>({});
   const [accumulatedConcepts, setAccumulatedConcepts] = useState<Record<string, string[]>>({});
+  const [conceptEvidence, setConceptEvidence] = useState<Record<string, Record<string, ConceptEvidence[]>>>({});
   const [activeProfiles, setActiveProfiles] = useState<Record<string, string>>({});
   const [functionConcepts, setFunctionConcepts] = useState<FunctionConcept[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [selectedConcept, setSelectedConcept] = useState<{
+    participantId: string;
+    participantName: string;
+    concept: string;
+    evidence: ConceptEvidence[];
+  } | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
     const [debugResponse, conceptMapResponse] = await Promise.all([
@@ -41,6 +63,7 @@ export default function ConceptDashboard() {
 
     setParticipantStates(debugData.participantStates || {});
     setAccumulatedConcepts(debugData.accumulatedConcepts || {});
+    setConceptEvidence(debugData.conceptEvidence || {});
     setActiveProfiles(debugData.activeProfiles || {});
     setFunctionConcepts(conceptMapData.functions || []);
     setLastUpdated(new Date());
@@ -120,9 +143,22 @@ export default function ConceptDashboard() {
 
                 <div>
                   <Text size="xs" tt="uppercase" fw={700} c="dimmed">Accumulated Concepts</Text>
-                  <Group gap={6} mt={4}>
-                    {concepts.length > 0 ? concepts.map((concept) => (
-                      <Badge key={concept} color="teal" variant="light">
+                    <Group gap={6} mt={4}>
+                      {concepts.length > 0 ? concepts.map((concept) => (
+                      <Badge
+                        key={concept}
+                        color="teal"
+                        variant="light"
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => {
+                          setSelectedConcept({
+                            participantId,
+                            participantName: state?.name || participantId,
+                            concept,
+                            evidence: conceptEvidence[participantId]?.[concept] || [],
+                          });
+                        }}
+                      >
                         {concept}
                       </Badge>
                     )) : (
@@ -162,8 +198,8 @@ export default function ConceptDashboard() {
                   <Table.Td>
                     <Group gap={6}>
                       {fn.concepts.map((concept) => (
-                        <Badge key={concept} variant="light" color="grape">
-                          {concept}
+                        <Badge key={concept.name} variant="light" color="grape">
+                          {concept.name}
                         </Badge>
                       ))}
                     </Group>
@@ -177,6 +213,62 @@ export default function ConceptDashboard() {
           </Table>
         </Stack>
       </Card>
+
+      <Modal
+        opened={selectedConcept !== null}
+        onClose={() => setSelectedConcept(null)}
+        title={
+          selectedConcept ? (
+            <Group gap="xs">
+              <ParticipantLabel
+                id={selectedConcept.participantId}
+                name={selectedConcept.participantName}
+                avatarSize={20}
+                textSize={16}
+              />
+              <Text fw={700}>· {selectedConcept.concept}</Text>
+            </Group>
+          ) : null
+        }
+        size="xl"
+      >
+        {selectedConcept && (
+          <Stack gap="md">
+            {selectedConcept.evidence.length > 0 ? selectedConcept.evidence.map((entry, index) => (
+              <Card key={`${entry.function}-${index}`} withBorder radius="md" padding="md">
+                <Stack gap="xs">
+                  <Group justify="space-between">
+                    <Text fw={700} ff="monospace">{entry.function}</Text>
+                    <Badge variant="light">{entry.source}</Badge>
+                  </Group>
+                  <Text size="sm" c="dimmed">
+                    Lines {entry.line_start}-{entry.line_end} in the inferred implementation snippet.
+                  </Text>
+                  <div>
+                    <Text size="xs" tt="uppercase" fw={700} c="dimmed" mb={4}>Observed Implementation</Text>
+                    <Code block style={{ whiteSpace: 'pre-wrap' }}>
+                      {entry.code}
+                    </Code>
+                  </div>
+                  <div>
+                    <Text size="xs" tt="uppercase" fw={700} c="dimmed" mb={4}>Solution Reference Context</Text>
+                    <Code block style={{ whiteSpace: 'pre-wrap' }}>
+                      {entry.solution_reference || 'No predefined reference snippet available.'}
+                    </Code>
+                  </div>
+                  <Text size="xs" c="dimmed">
+                    Updated {new Date(entry.updated_at * 1000).toLocaleString()}
+                  </Text>
+                </Stack>
+              </Card>
+            )) : (
+              <Text size="sm" c="dimmed">
+                No implementation evidence has been inferred for this concept yet.
+              </Text>
+            )}
+          </Stack>
+        )}
+      </Modal>
     </Stack>
   );
 }
