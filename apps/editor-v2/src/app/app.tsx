@@ -86,14 +86,6 @@ export function App() {
                       Help Requests
                     </Button>
                   </Indicator>
-                  <Button
-                    size="compact-sm"
-                    variant={location.pathname === '/conceptdashboard' ? 'filled' : 'light'}
-                    component={Link}
-                    to="/conceptdashboard"
-                  >
-                    Concept Dashboard
-                  </Button>
                   {profile && profile.photo ? (
                     <Group gap={8}>
                       <img
