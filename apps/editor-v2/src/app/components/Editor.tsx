@@ -347,6 +347,20 @@ function createRemoteCursorExtension(remoteCursors: RemoteCursor[]) {
   return [remoteCursorField];
 }
 
+function replaceEditorDoc(view: EditorView, nextDoc: string) {
+  const currentDoc = view.state.doc.toString();
+  if (currentDoc === nextDoc) return;
+
+  const currentSelection = view.state.selection.main;
+  const clampedAnchor = Math.min(currentSelection.anchor, nextDoc.length);
+  const clampedHead = Math.min(currentSelection.head, nextDoc.length);
+
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: nextDoc },
+    selection: { anchor: clampedAnchor, head: clampedHead },
+  });
+}
+
 export default function Editor() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [personalCode, setPersonalCode] = useState("");
@@ -525,6 +539,16 @@ export default function Editor() {
     [remoteTeamCursors]
   );
 
+  const handlePersonalEditorChange = useCallback((value: string) => {
+    setPersonalCode(value);
+  }, []);
+
+  useEffect(() => {
+    const view = personalEditorViewRef.current;
+    if (!view) return;
+    replaceEditorDoc(view, personalCode);
+  }, [personalCode]);
+
   const testSingleFunction = useCallback(async (functionCode: string) => {
     const channel = storedUserId;
     await fetch(`${BACKEND_URL}/testFunction`, {
@@ -546,6 +570,17 @@ export default function Editor() {
       void testSingleFunction(functionCode);
     }),
     [testSingleFunction]
+  );
+
+  const personalEditorResolvedExtensions = useMemo(
+    () => [
+      ...personalEditorExtensions,
+      runIconField,
+      personalRunIconGutter,
+      runIconGutterTheme,
+      ...inlineHelpExtension,
+    ],
+    [personalEditorExtensions, personalRunIconGutter, inlineHelpExtension]
   );
 
   // Help session countdown timer (helpee side)
@@ -1042,18 +1077,12 @@ export default function Editor() {
                   <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
                     <CodeMirror
                       height="100%"
-                      value={personalCode}
                       onCreateEditor={(view) => {
                         personalEditorViewRef.current = view;
+                        replaceEditorDoc(view, personalCode);
                       }}
-                      onChange={(value) => { setPersonalCode(value); sendTypingEvent('personal'); }}
-                      extensions={[
-                        ...personalEditorExtensions,
-                        runIconField,
-                        personalRunIconGutter,
-                        runIconGutterTheme,
-                        ...inlineHelpExtension,
-                      ]}
+                      onChange={handlePersonalEditorChange}
+                      extensions={personalEditorResolvedExtensions}
                       style={{ height: '100%' }}
                     />
                     {/* Floating helper card — shown when someone requests help (incoming) */}
