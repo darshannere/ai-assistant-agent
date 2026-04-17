@@ -611,6 +611,29 @@ export default function Editor() {
     }, 2000);
   }, [storedUserId]);
 
+  const syncTeamEditorToBackend = useCallback((doc: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const teamView = teamEditorViewRef.current;
+    const selection = teamView && teamView.hasFocus && teamView.dom.ownerDocument.hasFocus()
+      ? teamView.state.selection.main
+      : null;
+
+    ws.send(JSON.stringify({
+      event: 'updateMaster',
+      payload: {
+        cursor: selection ? {
+          anchor: selection.anchor,
+          head: selection.head,
+        } : null,
+        doc,
+        name: storedUserId,
+        timeStamp: new Date().getTime(),
+      },
+    }));
+  }, [storedUserId]);
+
   function extractJsons(text: string): object[] {
     const jsonMatches = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)];
     return jsonMatches.map(match => {
@@ -845,6 +868,7 @@ export default function Editor() {
 
     ytext.delete(targetFunction.from, targetFunction.to - targetFunction.from);
     ytext.insert(targetFunction.from, `${sourceFunction.text}\n\n`);
+    syncTeamEditorToBackend(ytext.toString());
   };
 
   const formatTime = (seconds: number) => {
