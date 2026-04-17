@@ -90,6 +90,18 @@ class SocketManager:
 
     def disconnect(self, ws: WebSocket):
         self.connections.remove(ws)
+        global cursor_positions, state
+        if ws.id in cursor_positions:
+            del cursor_positions[ws.id]
+            event = {
+                "event": "document_update",
+                "payload": {
+                    "doc": state,
+                    "user": ws.id,
+                    "cursors": cursor_positions,
+                },
+            }
+            asyncio.create_task(self.broadcast(json.dumps(event)))
         conns = [conn for conn in self.connections if conn.id != "control"]
         if len(conns) == 0:
             if self.countdown_task:
@@ -1039,10 +1051,17 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
             loaded = json.loads(data)
             if loaded["event"] == "updateMaster":
                 msgs.append(loaded["payload"])
+                incoming_doc = loaded["payload"].get("doc", state)
+                incoming_cursor = loaded["payload"].get("cursor")
+                doc_changed = incoming_doc != state
+                cursor_changed = cursor_positions.get(id) != incoming_cursor
 
-                if loaded["payload"]["doc"] != state:
-                    state = loaded["payload"]["doc"]
-                    cursor_positions[id] = loaded["payload"]["cursor"]
+                if doc_changed:
+                    state = incoming_doc
+                if cursor_changed:
+                    cursor_positions[id] = incoming_cursor
+
+                if doc_changed or cursor_changed:
                     event = {
                         "event": "document_update",
                         "payload": {

@@ -6,15 +6,14 @@ import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import ReactAnsi from "react-ansi";
-import { WebrtcProvider } from 'y-webrtc';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import GraphComponent from './SMM';
 import { ReactFlowProvider } from '@xyflow/react';
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
 import { Extension, StateField, EditorState, RangeSetBuilder } from "@codemirror/state";
 import { createPersonalEditorUpdateExtension } from './modals/extension';
 import HelpSessionStartedModal from './modals/HelpSessionModal';
-import { BACKEND_URL, WS_URL, SIGNALING_URL } from '../config';
+import { BACKEND_URL, WS_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
 
 // --- Inline Help Widget (shows "X can help with Y" badge inline in code) ---
@@ -166,6 +165,125 @@ const runIconGutterTheme = EditorView.theme({
 const ALL_PARTICIPANTS = ['A', 'B', 'C'];
 type HistoryEntry = [Date, string, boolean];
 type ParticipantProfile = { name: string; photo: string | null };
+type RemoteCursor = {
+  userId: string;
+  name: string;
+  photo: string | null;
+  color: string;
+  colorLight: string;
+  anchor: number;
+  head: number;
+};
+
+const userColors = [
+  { color: '#30bced', light: '#30bced33' },
+  { color: '#6eeb83', light: '#6eeb8333' },
+  { color: '#ffbc42', light: '#ffbc4233' },
+  { color: '#ecd444', light: '#ecd44433' },
+  { color: '#ee6352', light: '#ee635233' },
+  { color: '#9ac2c9', light: '#9ac2c933' },
+  { color: '#8acb88', light: '#8acb8833' },
+  { color: '#1be7ff', light: '#1be7ff33' },
+];
+
+function getParticipantColor(participantId: string) {
+  const seed = participantId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return userColors[seed % userColors.length];
+}
+
+function clampPosition(pos: number, max: number) {
+  return Math.max(0, Math.min(pos, max));
+}
+
+class RemoteCursorWidget extends WidgetType {
+  constructor(private readonly cursor: RemoteCursor) { super(); }
+
+  toDOM() {
+    const wrapper = document.createElement('span');
+    wrapper.className = styles.remoteCursor;
+    wrapper.style.setProperty('--remote-cursor-color', this.cursor.color);
+
+    const caret = document.createElement('span');
+    caret.className = styles.remoteCursorCaret;
+    wrapper.appendChild(caret);
+
+    const tooltip = document.createElement('span');
+    tooltip.className = styles.remoteCursorTooltip;
+
+    const avatar = this.cursor.photo ? document.createElement('img') : document.createElement('span');
+    avatar.className = styles.remoteCursorAvatar;
+    if (this.cursor.photo) {
+      avatar.setAttribute('src', this.cursor.photo);
+      avatar.setAttribute('alt', this.cursor.name);
+    } else {
+      avatar.textContent = this.cursor.name.charAt(0).toUpperCase();
+      avatar.classList.add(styles.remoteCursorAvatarFallback);
+    }
+
+    const label = document.createElement('span');
+    label.className = styles.remoteCursorTooltipLabel;
+    label.textContent = this.cursor.name;
+
+    tooltip.appendChild(avatar);
+    tooltip.appendChild(label);
+    wrapper.appendChild(tooltip);
+
+    return wrapper;
+  }
+
+  eq(other: RemoteCursorWidget) {
+    return other.cursor.userId === this.cursor.userId
+      && other.cursor.head === this.cursor.head
+      && other.cursor.anchor === this.cursor.anchor
+      && other.cursor.name === this.cursor.name
+      && other.cursor.photo === this.cursor.photo
+      && other.cursor.color === this.cursor.color;
+  }
+
+  ignoreEvent() { return true; }
+}
+
+function buildRemoteCursorDecorations(state: EditorState, remoteCursors: RemoteCursor[]) {
+  const decorations = [];
+  const docLength = state.doc.length;
+
+  for (const cursor of remoteCursors) {
+    const anchor = clampPosition(cursor.anchor, docLength);
+    const head = clampPosition(cursor.head, docLength);
+    const from = Math.min(anchor, head);
+    const to = Math.max(anchor, head);
+
+    if (from !== to) {
+      decorations.push(Decoration.mark({
+        attributes: {
+          style: `background-color: ${cursor.colorLight}; border-bottom: 1px solid ${cursor.color};`,
+        },
+      }).range(from, to));
+    }
+
+    decorations.push(Decoration.widget({
+      widget: new RemoteCursorWidget(cursor),
+      side: 1,
+    }).range(head));
+  }
+
+  return Decoration.set(decorations, true);
+}
+
+function createRemoteCursorExtension(remoteCursors: RemoteCursor[]) {
+  const remoteCursorField = StateField.define({
+    create(state) {
+      return buildRemoteCursorDecorations(state, remoteCursors);
+    },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      return buildRemoteCursorDecorations(tr.state, remoteCursors);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+
+  return [remoteCursorField];
+}
 
 export default function Editor() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -285,6 +403,9 @@ export default function Editor() {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
   const [participantProfiles, setParticipantProfiles] = useState<Record<string, ParticipantProfile>>({});
+  const [remoteTeamCursors, setRemoteTeamCursors] = useState<RemoteCursor[]>([]);
+  const suppressTeamSyncRef = useRef(false);
+  const participantProfilesRef = useRef<Record<string, ParticipantProfile>>({});
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
 
@@ -305,6 +426,7 @@ export default function Editor() {
     }, {});
 
     setParticipantProfiles(localProfiles);
+    participantProfilesRef.current = localProfiles;
 
     fetch(`${BACKEND_URL}/profiles`)
       .then((response) => response.json())
@@ -318,7 +440,11 @@ export default function Editor() {
           };
           return acc;
         }, {});
-        setParticipantProfiles((prev) => ({ ...prev, ...backendProfiles }));
+        setParticipantProfiles((prev) => {
+          const nextProfiles = { ...prev, ...backendProfiles };
+          participantProfilesRef.current = nextProfiles;
+          return nextProfiles;
+        });
       })
       .catch((error) => {
         console.warn('Failed to load participant profiles:', error);
@@ -328,6 +454,11 @@ export default function Editor() {
   const getParticipantProfile = useCallback((participantId: string) => {
     return participantProfiles[participantId] || { name: participantId, photo: null };
   }, [participantProfiles]);
+
+  const remoteCursorExtension = useMemo(
+    () => createRemoteCursorExtension(remoteTeamCursors),
+    [remoteTeamCursors]
+  );
 
   // Help session countdown timer (helpee side)
   useEffect(() => {
@@ -393,9 +524,38 @@ export default function Editor() {
         }
         if (data['event'] === 'initial') {
           if (typeof data?.payload?.doc === 'string') {
+            suppressTeamSyncRef.current = true;
             ytext.delete(0, ytext.length);
             ytext.insert(0, data.payload.doc);
+            suppressTeamSyncRef.current = false;
           }
+        }
+        if (data['event'] === 'document_update') {
+          const nextDoc = typeof data?.payload?.doc === 'string' ? data.payload.doc : ytext.toString();
+          if (nextDoc !== ytext.toString()) {
+            suppressTeamSyncRef.current = true;
+            ytext.delete(0, ytext.length);
+            ytext.insert(0, nextDoc);
+            suppressTeamSyncRef.current = false;
+          }
+
+          const incomingCursors = data?.payload?.cursors || {};
+          const nextRemoteCursors = Object.entries(incomingCursors).flatMap(([participantId, cursor]: [string, any]) => {
+            const cleanId = participantId.replace(/"/g, '');
+            if (cleanId === storedUserId || !cursor) return [];
+            const profile = participantProfilesRef.current[cleanId] || { name: cleanId, photo: null };
+            const color = getParticipantColor(cleanId);
+            return [{
+              userId: cleanId,
+              name: profile.name || cleanId,
+              photo: profile.photo || null,
+              color: color.color,
+              colorLight: color.light,
+              anchor: typeof cursor.anchor === 'number' ? cursor.anchor : (typeof cursor.head === 'number' ? cursor.head : 0),
+              head: typeof cursor.head === 'number' ? cursor.head : (typeof cursor.anchor === 'number' ? cursor.anchor : 0),
+            }];
+          });
+          setRemoteTeamCursors(nextRemoteCursors);
         }
         if (data['event'] === 'StartHelpSession') {
           const { helper, helpee, time, hint } = data['payload'];
@@ -606,20 +766,28 @@ export default function Editor() {
                         height="100%"
                         extensions={[
                           python(),
-                          yCollab(ytext, provider.awareness),
+                          yCollab(ytext, undefined),
                           runIconField,
                           runIconGutter,
                           runIconGutterTheme,
+                          ...remoteCursorExtension,
                           ViewPlugin.fromClass(class {
                             update(u: ViewUpdate) {
-                              if (!u.docChanged) return;
-                              sendTypingEvent('team');
+                              if (suppressTeamSyncRef.current) return;
+                              if (!u.docChanged && !u.selectionSet && !u.focusChanged) return;
+                              if (u.docChanged) sendTypingEvent('team');
                               const ws = wsRef.current;
                               if (ws && ws.readyState === WebSocket.OPEN) {
+                                const selection = u.view.hasFocus && u.view.dom.ownerDocument.hasFocus()
+                                  ? u.state.selection.main
+                                  : null;
                                 ws.send(JSON.stringify({
                                   event: 'updateMaster',
                                   payload: {
-                                    cursor: 0,
+                                    cursor: selection ? {
+                                      anchor: selection.anchor,
+                                      head: selection.head,
+                                    } : null,
                                     doc: u.state.doc.toString(),
                                     name: storedUserId,
                                     timeStamp: new Date().getTime(),
@@ -1039,55 +1207,4 @@ export default function Editor() {
 
 // Y.js Collaboration Extension
 const ydoc = new Y.Doc();
-const provider = new WebrtcProvider('prime-collab-room-demo', ydoc, {
-  signaling: [SIGNALING_URL],
-  peerOpts: {
-    config: {
-      iceServers: [
-        {
-          urls: 'stun:stun.relay.metered.ca:80',
-        },
-        {
-          urls: 'turn:global.relay.metered.ca:80',
-          username: 'a6cd4590c56d422090feaf27',
-          credential: '99XwNU33NXuWP2eZ',
-        },
-        {
-          urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-          username: 'a6cd4590c56d422090feaf27',
-          credential: '99XwNU33NXuWP2eZ',
-        },
-        {
-          urls: 'turn:global.relay.metered.ca:443',
-          username: 'a6cd4590c56d422090feaf27',
-          credential: '99XwNU33NXuWP2eZ',
-        },
-        {
-          urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-          username: 'a6cd4590c56d422090feaf27',
-          credential: '99XwNU33NXuWP2eZ',
-        },
-      ],
-    },
-  },
-});
 const ytext = ydoc.getText('codemirror');
-
-const userColors = [
-  { color: '#30bced', light: '#30bced33' },
-  { color: '#6eeb83', light: '#6eeb8333' },
-  { color: '#ffbc42', light: '#ffbc4233' },
-  { color: '#ecd444', light: '#ecd44433' },
-  { color: '#ee6352', light: '#ee635233' },
-  { color: '#9ac2c9', light: '#9ac2c933' },
-  { color: '#8acb88', light: '#8acb8833' },
-  { color: '#1be7ff', light: '#1be7ff33' },
-];
-
-const color = userColors[Math.floor(Math.random() * 8) % userColors.length];
-
-provider.awareness.setLocalStateField('user', {
-  name: localStorage.getItem('participant-id'),
-  color: color.color,
-  colorLight: color.light,
-});
