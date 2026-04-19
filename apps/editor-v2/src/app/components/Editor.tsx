@@ -809,6 +809,13 @@ export default function Editor() {
         if (data['event'] === 'monitorPlayground') {
           const editors = data['payload']['editors'] || {};
           setOtherEditors(editors);
+          // Agent-mode helpers can write to our personal editor slot; when
+          // the broadcast carries a value that differs from what we have
+          // locally, sync it so our own editor reflects the helper's edit.
+          const mine = editors[storedUserId];
+          if (typeof mine === 'string' && mine !== personalCode) {
+            setPersonalCode(mine);
+          }
         }
         if (data['event'] === 'profileUpdate') {
           const { id: pid, name, photo } = data['payload'] || {};
@@ -1172,12 +1179,27 @@ export default function Editor() {
                           <CodeMirror
                             height="100%"
                             value={otherEditors[p]}
-                            editable={false}
+                            editable={isAgentMode}
+                            onChange={(value) => {
+                              if (!isAgentMode) return;
+                              setOtherEditors((prev) => ({ ...prev, [p]: value }));
+                              const ws = wsRef.current;
+                              if (ws && ws.readyState === WebSocket.OPEN) {
+                                ws.send(JSON.stringify({
+                                  event: 'updatePlayground',
+                                  payload: {
+                                    userId: p,
+                                    doc: value,
+                                    timeStamp: new Date().getTime(),
+                                  },
+                                }));
+                              }
+                            }}
                             onCreateEditor={(view) => {
                               leftEditorViewRefs.current[p] = view;
                             }}
                             extensions={[python(), runIconField, sharedRunIconGutter, runIconGutterTheme]}
-                            style={{ height: '100%', opacity: 0.9 }}
+                            style={{ height: '100%', opacity: isAgentMode ? 1 : 0.9 }}
                           />
                         ) : (
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
