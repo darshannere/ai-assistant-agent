@@ -84,9 +84,10 @@ class SocketManager:
         self.connections.append(ws)
         global state
         if ws.id != "control":
-            # Team Editor starts blank on first startup. Once the team types
-            # anything, `state` persists, so reconnecting users still see it.
-            msg = json.dumps({"event": "initial", "payload": {"doc": state}})
+            with open("study_problem_blank.py", "r") as file:
+                starter_code = file.read()
+            doc = state if state != "" else starter_code
+            msg = json.dumps({"event": "initial", "payload": {"doc": doc}})
             await self.direct_message(msg, id)
 
     def disconnect(self, ws: WebSocket):
