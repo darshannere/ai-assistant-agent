@@ -3,7 +3,6 @@ import  {
     ReactFlow,
     useNodesState,
     useEdgesState,
-    MiniMap,
     Controls,
     Background,
     Panel, // Use Panel for UI elements overlaying the graph
@@ -340,7 +339,7 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
     // --- Render Component ---
     return (
         // Ensure the container has a defined height for React Flow to render correctly
-        <div style={{ height: '80vh', width: '100%', border: '1px solid #eee' }}>
+        <div style={{ height: '100%', width: '100%', minHeight: 240, border: '1px solid #eee' }}>
             <ReactFlow
                 nodes={nodes}
                 edges={edges}
@@ -358,7 +357,6 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
             >
                 {/* Add UI Controls */}
                 <Controls />
-                <MiniMap nodeStrokeWidth={3} zoomable pannable />
                 <Background variant="dots" gap={15} size={1} />
 
                 {/* Graph Status and Participant Avatars */}
