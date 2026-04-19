@@ -25,6 +25,9 @@ export function App() {
   const [availableHelpers, setAvailableHelpers] = useState<Array<{
     helperId?: string; helperName: string; helperPhoto?: string | null; concepts?: string[];
   }>>([]);
+  const [pendingHelpRequests, setPendingHelpRequests] = useState<Array<{
+    helpeeId: string; helpeeName: string; helpeePhoto: string | null;
+  }>>([]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -35,14 +38,37 @@ export function App() {
     return () => window.removeEventListener('canary-helpers-updated', handler);
   }, []);
 
-  // Poll help queue count
+  // Poll help queue + build the pending-help-requests list. /helpQueue is the
+  // source of truth; WS events make updates snappier. The helpee themselves
+  // never sees their own pill — it's only for potential helpers.
   const fetchQueueCount = useCallback(async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/helpQueue`);
       const data = await res.json();
-      setHelpQueueCount((data.queue || []).length);
+      const queue = (data.queue || []) as Array<{ id: string; name?: string; photo?: string | null }>;
+      setHelpQueueCount(queue.length);
+      setPendingHelpRequests((prev) => {
+        const next = queue.map((item) => ({
+          helpeeId: item.id,
+          helpeeName: item.name || item.id,
+          helpeePhoto: item.photo ?? null,
+        }));
+        if (prev.length === next.length && prev.every((p, i) => p.helpeeId === next[i].helpeeId)) {
+          return prev;
+        }
+        return next;
+      });
     } catch { /* backend down */ }
-  }, []);
+  }, [value]);
+
+  // Real-time catch-up: when Editor.tsx broadcasts a freshly-received
+  // helpRequest, bump the poll immediately so the pill appears without waiting
+  // for the 5-second interval.
+  useEffect(() => {
+    const handler = () => fetchQueueCount();
+    window.addEventListener('canary-help-needed-updated', handler);
+    return () => window.removeEventListener('canary-help-needed-updated', handler);
+  }, [fetchQueueCount]);
 
   useEffect(() => {
     fetchQueueCount();
@@ -98,6 +124,39 @@ export function App() {
                       Help Requests
                     </Button>
                   </Indicator>
+                  {pendingHelpRequests.map((req) => (
+                    <Button
+                      key={req.helpeeId}
+                      size="compact-sm"
+                      variant="filled"
+                      color="red"
+                      onClick={() => {
+                        // Globally dismiss this request (clears the pill on
+                        // every client via backend broadcast) and focus the
+                        // helpee's editor tab so we can see what they're
+                        // currently working on.
+                        setPendingHelpRequests((prev) => prev.filter((p) => p.helpeeId !== req.helpeeId));
+                        fetch(`${BACKEND_URL}/helpQueue/dismiss/${req.helpeeId}`, { method: 'POST' })
+                          .catch(() => { /* backend down — local dismiss is still in effect until next poll */ });
+                        window.dispatchEvent(new CustomEvent('canary-focus-helpee', {
+                          detail: { helpeeId: req.helpeeId },
+                        }));
+                      }}
+                      leftSection={
+                        req.helpeePhoto ? (
+                          <img
+                            src={req.helpeePhoto}
+                            alt={req.helpeeName}
+                            style={{ width: 18, height: 18, borderRadius: '50%', objectFit: 'cover' }}
+                          />
+                        ) : (
+                          <Avatar size={18} radius="xl">{req.helpeeName?.[0]?.toUpperCase() || '?'}</Avatar>
+                        )
+                      }
+                    >
+                      {req.helpeeName} needs help
+                    </Button>
+                  ))}
                   {availableHelpers.length > 0 && (
                     <Menu shadow="md" width={280} position="bottom-end">
                       <Menu.Target>

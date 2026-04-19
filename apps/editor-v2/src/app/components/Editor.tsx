@@ -420,6 +420,12 @@ export default function Editor() {
     helpeePhoto: string | null;
   } | null>(null);
   const [helpCardVisible, setHelpCardVisible] = useState(false);
+  const helpCardDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pendingHelpRequests, setPendingHelpRequests] = useState<Array<{
+    helpeeId: string;
+    helpeeName: string;
+    helpeePhoto: string | null;
+  }>>([]);
 
   // Other participants' personal editor code
   const [otherEditors, setOtherEditors] = useState<Record<string, string>>({});
@@ -474,6 +480,20 @@ export default function Editor() {
     document.addEventListener("inline-help-dismiss", handler);
     return () => document.removeEventListener("inline-help-dismiss", handler);
   }, []);
+
+  // When the header "<helpee> needs help" pill is clicked, switch the left
+  // tab to that helpee so the helper sees their live personal editor.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const helpeeId = detail?.helpeeId;
+      if (typeof helpeeId === 'string' && helpeeId !== storedUserId) {
+        setActiveTab(helpeeId);
+      }
+    };
+    window.addEventListener('canary-focus-helpee', handler);
+    return () => window.removeEventListener('canary-focus-helpee', handler);
+  }, [storedUserId]);
 
   // Listen for clicks on the inline help widget button
   useEffect(() => {
@@ -790,12 +810,63 @@ export default function Editor() {
           const editors = data['payload']['editors'] || {};
           setOtherEditors(editors);
         }
+        if (data['event'] === 'profileUpdate') {
+          const { id: pid, name, photo } = data['payload'] || {};
+          if (typeof pid === 'string' && pid !== storedUserId) {
+            setParticipantProfiles((prev) => {
+              const cleanId = pid.replace(/"/g, '');
+              const next = {
+                ...prev,
+                [cleanId]: { name: name || cleanId, photo: photo || null },
+              };
+              participantProfilesRef.current = next;
+              return next;
+            });
+          }
+        }
         if (data['event'] === 'helpRequest') {
           const { helpeeId, helpeeName, helpeePhoto } = data['payload'];
-          // Only show to other participants, not the one who sent it
+          // Ensure the helpee has a profile entry so their editor tab renders;
+          // otherSelection via setActiveTab won't work if the tab doesn't exist.
+          setParticipantProfiles((prev) => {
+            if (prev[helpeeId]) return prev;
+            const next = { ...prev, [helpeeId]: { name: helpeeName || helpeeId, photo: helpeePhoto || null } };
+            participantProfilesRef.current = next;
+            return next;
+          });
+          // Add to persistent pending list (dedup by helpeeId). The header
+          // pill keeps showing this request even after the floating card is
+          // auto-dismissed, so a helper who missed the pop-up can still act.
+          // Fire for the helpee too so their own header updates in real time
+          // (app.tsx shows the pill for everyone in the queue).
+          setPendingHelpRequests((prev) => {
+            const existing = prev.find((p) => p.helpeeId === helpeeId);
+            const next = existing
+              ? prev
+              : [...prev, { helpeeId, helpeeName, helpeePhoto }];
+            window.dispatchEvent(new CustomEvent('canary-help-needed-updated', { detail: { requests: next } }));
+            return next;
+          });
+          // Floating popup card is only for helpers, not the helpee themselves.
           if (helpeeId !== storedUserId) {
             setIncomingHelpRequest({ helpeeId, helpeeName, helpeePhoto });
             setHelpCardVisible(true);
+            // Auto-dismiss the floating card after 4s so it doesn't block the editor.
+            if (helpCardDismissTimerRef.current) clearTimeout(helpCardDismissTimerRef.current);
+            helpCardDismissTimerRef.current = setTimeout(() => {
+              setHelpCardVisible(false);
+            }, 4000);
+          }
+        }
+        if (data['event'] === 'StartHelpSession') {
+          // Once a help session starts, remove that helpee from the pending pill.
+          const { helpee } = data['payload'] || {};
+          if (helpee) {
+            setPendingHelpRequests((prev) => {
+              const next = prev.filter((p) => p.helpeeId !== helpee);
+              window.dispatchEvent(new CustomEvent('canary-help-needed-updated', { detail: { requests: next } }));
+              return next;
+            });
           }
         }
         if (data['event'] === 'helperSuggestion') {
@@ -976,7 +1047,7 @@ export default function Editor() {
         )}
 
         <PanelGroup direction="vertical">
-          <Panel defaultSize={70} minSize={20}>
+          <Panel defaultSize={55} minSize={20}>
             <PanelGroup direction="horizontal">
               {/* LEFT SIDE: Tabs (Team Editor + other participants) */}
               <Panel defaultSize={50} minSize={20}>
@@ -1176,6 +1247,27 @@ export default function Editor() {
                       )}
                     </Group>
                     <Group gap="xs">
+                      <Button
+                        onClick={() => {
+                          const ws = wsRef.current;
+                          const helpeeProfile = participantProfilesRef.current[storedUserId];
+                          if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                              event: 'helpRequest',
+                              payload: {
+                                helpeeId: storedUserId,
+                                helpeeName: helpeeProfile?.name || storedUserId,
+                                helpeePhoto: helpeeProfile?.photo || null,
+                              },
+                            }));
+                          }
+                        }}
+                        size='compact-xs'
+                        color='red'
+                        variant='light'
+                      >
+                        Request Help
+                      </Button>
                       <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
                       {/* <Button onClick={runPersonalCode} size='compact-xs'>Run</Button> */}
                       <Button onClick={clearCode} size='compact-xs'>Clear Console</Button>
@@ -1357,10 +1449,10 @@ export default function Editor() {
           <PanelResizeHandle />
 
           {/* Bottom: Graph + Output */}
-          <Panel defaultSize={30} minSize={20}>
+          <Panel defaultSize={45} minSize={20}>
             <PanelGroup direction="horizontal">
               <Panel defaultSize={50}>
-                <div style={{ padding: '10px' }}>
+                <div style={{ padding: '10px', height: '100%', boxSizing: 'border-box' }}>
                   <ReactFlowProvider>
                     <GraphComponent onNodeSelect={handleNodeSelect} />
                   </ReactFlowProvider>
