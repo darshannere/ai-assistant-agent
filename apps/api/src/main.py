@@ -1,4 +1,5 @@
 import asyncio
+import os
 import aiohttp
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -421,7 +422,7 @@ class EditorManager:
         # client = genai.Client(api_key="")
         # self.client = client
         client = OpenAI(
-            api_key="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",
+            api_key=os.environ["OPENROUTER_API_KEY"],
             base_url="https://openrouter.ai/api/v1"
         )
         self.client = client
@@ -1710,6 +1711,41 @@ def get_help_queue():
 def get_all_profiles():
     """Get all participant profiles"""
     return {"status": "success", "profiles": profile_manager.get_all_profiles()}
+
+
+@app.post("/debug/clear-participants")
+async def clear_participants():
+    """Wipe all participant-keyed in-memory state and tell connected clients to reset."""
+    global cursor_positions, state
+    cleared = {
+        "profiles": len(profile_manager.profiles),
+        "individual_editors": len(editor_manager.individual),
+        "active_profiles": len(editor_manager.profiles),
+        "help_queue": len(editor_manager.help_queue),
+        "active_help_sessions": len(editor_manager.active_help_sessions),
+        "participant_concepts": len(editor_manager.participant_concepts),
+        "participant_concept_evidence": len(editor_manager.participant_concept_evidence),
+        "cursors": len(cursor_positions),
+        "graph_nodes_reset": len(graph_manager.graph),
+    }
+    profile_manager.profiles.clear()
+    editor_manager.individual.clear()
+    editor_manager.profiles.clear()
+    editor_manager.help_queue.clear()
+    editor_manager.active_help_sessions.clear()
+    editor_manager.participant_concepts.clear()
+    editor_manager.participant_concept_evidence.clear()
+    editor_manager.master = ""
+    cursor_positions.clear()
+    state = ""
+    # Reset every graph node's progress so tests can run fresh for next participants.
+    for node in graph_manager.graph.values():
+        node.claimed_by = ""
+        node.work_status = 0
+        node.completed = 0
+        node.total = 0
+    await socketManager.broadcast(json.dumps({"event": "participantsCleared"}))
+    return {"status": "success", "cleared": cleared}
 
 
 @app.get("/debug/states")

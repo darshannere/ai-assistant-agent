@@ -66,6 +66,7 @@ export default function ConceptDashboard() {
   const [selectedLineStart, setSelectedLineStart] = useState<number | null>(null);
   const [selectedLineEnd, setSelectedLineEnd] = useState<number | null>(null);
   const [savingManualEdit, setSavingManualEdit] = useState(false);
+  const [clearingParticipants, setClearingParticipants] = useState(false);
 
   const fetchDashboardData = useCallback(async () => {
     const [debugResponse, conceptMapResponse] = await Promise.all([
@@ -135,6 +136,24 @@ export default function ConceptDashboard() {
     }
   };
 
+  const handleClearParticipants = useCallback(async () => {
+    const ok = window.confirm(
+      'Clear ALL participants from backend memory?\n\nThis wipes profiles, concepts, evidence, help queue, and cursors. Cannot be undone.'
+    );
+    if (!ok) return;
+    setClearingParticipants(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/debug/clear-participants`, { method: 'POST' });
+      if (!response.ok) throw new Error(`Clear failed: ${response.status}`);
+      await fetchDashboardData();
+    } catch (error) {
+      console.error('Failed to clear participants:', error);
+      window.alert('Failed to clear participants — see console for details.');
+    } finally {
+      setClearingParticipants(false);
+    }
+  }, [fetchDashboardData]);
+
   const handleSaveManualEdit = useCallback(async () => {
     if (!manualEditTarget || selectedLineStart === null) return;
     const finalEnd = selectedLineEnd ?? selectedLineStart;
@@ -174,9 +193,20 @@ export default function ConceptDashboard() {
             Research and debugging view for participant cognition, current work state, and evolving concept maps.
           </Text>
         </div>
-        <Text size="sm" c="dimmed">
-          {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : 'Loading...'}
-        </Text>
+        <Group gap="sm" align="center">
+          <Text size="sm" c="dimmed">
+            {lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString()}` : 'Loading...'}
+          </Text>
+          <Button
+            color="red"
+            variant="light"
+            size="xs"
+            loading={clearingParticipants}
+            onClick={handleClearParticipants}
+          >
+            Clear All Participants
+          </Button>
+        </Group>
       </Group>
 
       <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">

@@ -1,5 +1,8 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { python } from '@codemirror/lang-python';
+import { indentOnInput, indentUnit } from '@codemirror/language';
+import { defaultKeymap, indentWithTab } from '@codemirror/commands';
+import { keymap } from '@codemirror/view';
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
 import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider } from "@mantine/core"
 import styles from "./Editor.module.css"
@@ -20,15 +23,20 @@ import ParticipantLabel from './ParticipantLabel';
 class InlineHelpWidget extends WidgetType {
   constructor(private readonly text: string, private readonly mode: 'suggestion' | 'pending' = 'suggestion') { super(); }
   toDOM() {
+    const wrap = document.createElement("span");
+    wrap.style.marginLeft = "12px";
+    wrap.style.display = "inline-flex";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "4px";
+    wrap.style.verticalAlign = "middle";
+
     const btn = document.createElement("button");
-    btn.style.marginLeft = "12px";
     btn.style.padding = "4px 12px";
     btn.style.borderRadius = "6px";
     btn.style.border = "none";
     btn.style.fontSize = "13px";
     btn.style.fontWeight = "600";
     btn.style.lineHeight = "1.4";
-    btn.style.verticalAlign = "middle";
     btn.style.fontFamily = "inherit";
 
     if (this.mode === 'pending') {
@@ -37,21 +45,46 @@ class InlineHelpWidget extends WidgetType {
       btn.style.cursor = "default";
       btn.style.boxShadow = "0 1px 3px rgba(0, 0, 0, 0.15)";
       btn.textContent = `🧑‍💻 ${this.text}`;
-    } else {
-      btn.style.background = "#1f2937";
-      btn.style.color = "#ffffff";
-      btn.style.cursor = "pointer";
-      btn.style.boxShadow = "0 2px 6px rgba(0, 0, 0, 0.25)";
-      btn.textContent = `🧑‍💻 ${this.text}`;
-      btn.addEventListener("mouseenter", () => { btn.style.background = "#374151"; });
-      btn.addEventListener("mouseleave", () => { btn.style.background = "#1f2937"; });
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        document.dispatchEvent(new CustomEvent("inline-help-click"));
-      });
+      wrap.appendChild(btn);
+      return wrap;
     }
-    return btn;
+
+    btn.style.background = "#1f2937";
+    btn.style.color = "#ffffff";
+    btn.style.cursor = "pointer";
+    btn.style.boxShadow = "0 2px 6px rgba(0, 0, 0, 0.25)";
+    btn.textContent = `🧑‍💻 ${this.text}`;
+    btn.addEventListener("mouseenter", () => { btn.style.background = "#374151"; });
+    btn.addEventListener("mouseleave", () => { btn.style.background = "#1f2937"; });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      document.dispatchEvent(new CustomEvent("inline-help-click"));
+    });
+    wrap.appendChild(btn);
+
+    const close = document.createElement("button");
+    close.textContent = "×";
+    close.title = "Dismiss";
+    close.setAttribute("aria-label", "Dismiss inline help suggestion");
+    close.style.padding = "0 6px";
+    close.style.border = "none";
+    close.style.background = "transparent";
+    close.style.color = "#6b7280";
+    close.style.fontSize = "16px";
+    close.style.lineHeight = "1";
+    close.style.cursor = "pointer";
+    close.style.fontFamily = "inherit";
+    close.addEventListener("mouseenter", () => { close.style.color = "#111827"; });
+    close.addEventListener("mouseleave", () => { close.style.color = "#6b7280"; });
+    close.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      document.dispatchEvent(new CustomEvent("inline-help-dismiss"));
+    });
+    wrap.appendChild(close);
+
+    return wrap;
   }
   eq(other: InlineHelpWidget) { return this.text === other.text && this.mode === other.mode; }
   ignoreEvent() { return false; }
@@ -369,6 +402,11 @@ export default function Editor() {
   const id = localStorage.getItem('participant-id') || 'D';
   const storedUserId = id.replace(/"/g, '');
   const [activeTab, setActiveTab] = useState<string | null>('team');
+  // `?mode=agent` disables CodeMirror features that fight keystroke-based
+  // Playwright input (autocomplete, auto-indent, bracket closing). Only the
+  // Personal Editor is affected; the Team Editor keeps its full feature set.
+  const isAgentMode = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('mode') === 'agent';
 
   // Helpee-side state
   const [helpSessionActive, setHelpSessionActive] = useState(false);
@@ -430,6 +468,13 @@ export default function Editor() {
     }
   }, []);
 
+  // Listen for user dismissing the inline help widget (X button)
+  useEffect(() => {
+    const handler = () => setInlineHelpExtension([]);
+    document.addEventListener("inline-help-dismiss", handler);
+    return () => document.removeEventListener("inline-help-dismiss", handler);
+  }, []);
+
   // Listen for clicks on the inline help widget button
   useEffect(() => {
     const handler = () => {
@@ -473,7 +518,7 @@ export default function Editor() {
     }
   };
 
-  const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python()]);
+  const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python(), ...pythonIndent]);
   const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
   const [sessionDetails, setSessionDetails] = useState({
     totalDurationSeconds: 150,
@@ -482,6 +527,8 @@ export default function Editor() {
   });
   const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<unknown[]>([]);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSuggestionKeyRef = useRef<string | null>(null);
+  const helpersStaleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<string, string>>({});
   const [participantProfiles, setParticipantProfiles] = useState<Record<string, ParticipantProfile>>({});
   const [remoteTeamCursors, setRemoteTeamCursors] = useState<RemoteCursor[]>([]);
@@ -491,7 +538,7 @@ export default function Editor() {
   const personalEditorViewRef = useRef<EditorView | null>(null);
   const leftEditorViewRefs = useRef<Record<string, EditorView | null>>({});
 
-  const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId);
+  const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId && participantProfiles[p]);
 
   useEffect(() => {
     const localProfiles = ALL_PARTICIPANTS.reduce<Record<string, ParticipantProfile>>((acc, participantId) => {
@@ -524,10 +571,9 @@ export default function Editor() {
           };
           return acc;
         }, {});
-        setParticipantProfiles((prev) => {
-          const nextProfiles = { ...prev, ...backendProfiles };
-          participantProfilesRef.current = nextProfiles;
-          return nextProfiles;
+        setParticipantProfiles(() => {
+          participantProfilesRef.current = backendProfiles;
+          return backendProfiles;
         });
       })
       .catch((error) => {
@@ -663,7 +709,7 @@ export default function Editor() {
         console.log("WebSocket connection established");
         console.log("Configuring personal editor WebSocket extension for user:", storedUserId);
         const playgroundUpdateExtension = createPersonalEditorUpdateExtension(ws, storedUserId);
-        setPersonalEditorExtensions([python(), playgroundUpdateExtension]);
+        setPersonalEditorExtensions([python(), ...pythonIndent, playgroundUpdateExtension]);
       };
 
       ws.onmessage = (event) => {
@@ -672,6 +718,11 @@ export default function Editor() {
         if (data['event'] === 'run') {
           console.log(data);
           appendToHistory(data['stdout'], data['all']);
+        }
+        if (data['event'] === 'participantsCleared') {
+          localStorage.removeItem('participant-id');
+          ['A', 'B', 'C'].forEach((p) => localStorage.removeItem(`participant_${p}`));
+          window.location.href = '/';
         }
         if (data['event'] === 'initial') {
           if (typeof data?.payload?.doc === 'string') {
@@ -750,19 +801,45 @@ export default function Editor() {
         if (data['event'] === 'helperSuggestion') {
           const { suggestion, detectedConcepts, anchorKeyword } = data['payload'];
           if (suggestion && !inlineHelpRequested) {
-            setCurrentSuggestion(suggestion);
-            setCurrentAnchorKeyword(anchorKeyword || detectedConcepts[0] || 'pass');
-            const anchor = anchorKeyword || 'pass';
             const conceptLabel = detectedConcepts[0] || 'this';
-            setInlineHelpExtension([
-              createInlineHelpField(
-                `${suggestion.helperName} can help with ${conceptLabel}`,
-                anchor,
-                "suggestion"
-              ),
-            ]);
-            // Auto-dismiss inline help badge after 10 seconds
-            setTimeout(() => setInlineHelpExtension([]), 10000);
+            const key = `${suggestion.helperId || suggestion.helperName}::${conceptLabel}`;
+
+            // Aggregate into the helper list for the header button (dedup per helper+concept).
+            setHelperSuggestions((prev) => {
+              const existing = prev.find(
+                (s) => s.helperId === suggestion.helperId && s.concepts?.[0] === conceptLabel
+              );
+              const next = existing ? prev : [...prev, { ...suggestion, concepts: [conceptLabel] }];
+              window.dispatchEvent(new CustomEvent('canary-helpers-updated', { detail: { helpers: next } }));
+              return next;
+            });
+
+            // Backend keeps re-sending suggestions while the user needs help. If 15s
+            // elapse without a new one (user moved to another task or finished),
+            // clear the list so the header button goes away.
+            if (helpersStaleTimerRef.current) clearTimeout(helpersStaleTimerRef.current);
+            helpersStaleTimerRef.current = setTimeout(() => {
+              setHelperSuggestions([]);
+              lastSuggestionKeyRef.current = null;
+              window.dispatchEvent(new CustomEvent('canary-helpers-updated', { detail: { helpers: [] } }));
+            }, 15000);
+
+            // Only show the inline editor badge ONCE per unique helper+concept.
+            if (lastSuggestionKeyRef.current !== key) {
+              lastSuggestionKeyRef.current = key;
+              setCurrentSuggestion(suggestion);
+              setCurrentAnchorKeyword(anchorKeyword || detectedConcepts[0] || 'pass');
+              const anchor = anchorKeyword || 'pass';
+              setInlineHelpExtension([
+                createInlineHelpField(
+                  `${suggestion.helperName} can help with ${conceptLabel}`,
+                  anchor,
+                  "suggestion"
+                ),
+              ]);
+              // Auto-dismiss inline help badge after 3 seconds
+              setTimeout(() => setInlineHelpExtension([]), 3000);
+            }
           }
         }
         if (data['event'] === 'typing') {
@@ -953,6 +1030,7 @@ export default function Editor() {
                         }}
                         extensions={[
                           python(),
+                          ...pythonIndent,
                           yCollab(ytext, undefined),
                           runIconField,
                           sharedRunIconGutter,
@@ -1109,9 +1187,18 @@ export default function Editor() {
                       onCreateEditor={(view) => {
                         personalEditorViewRef.current = view;
                         replaceEditorDoc(view, personalCode);
+                        if (isAgentMode) {
+                          // Expose for Playwright fallback: `window.__personalEditorView.dispatch(...)`
+                          (window as any).__personalEditorView = view;
+                        }
                       }}
                       onChange={handlePersonalEditorChange}
                       extensions={personalEditorResolvedExtensions}
+                      basicSetup={isAgentMode ? {
+                        autocompletion: false,
+                        bracketMatching: false,
+                        closeBrackets: false,
+                      } : undefined}
                       style={{ height: '100%' }}
                     />
                     {/* Floating helper card — shown when someone requests help (incoming) */}
@@ -1380,6 +1467,13 @@ export default function Editor() {
     </>
   )
 }
+
+// Shared Python auto-indent extensions for all editable editors.
+const pythonIndent: Extension[] = [
+  indentUnit.of("    "),
+  indentOnInput(),
+  keymap.of([...defaultKeymap, indentWithTab]),
+];
 
 // Y.js Collaboration Extension
 const ydoc = new Y.Doc();
