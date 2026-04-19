@@ -84,10 +84,9 @@ class SocketManager:
         self.connections.append(ws)
         global state
         if ws.id != "control":
-            with open("study_problem_blank.py", "r") as file:
-                starter_code = file.read()
-            doc = state if state != "" else starter_code
-            msg = json.dumps({"event": "initial", "payload": {"doc": doc}})
+            # Team Editor starts blank on first startup. Once the team types
+            # anything, `state` persists, so reconnecting users still see it.
+            msg = json.dumps({"event": "initial", "payload": {"doc": state}})
             await self.direct_message(msg, id)
 
     def disconnect(self, ws: WebSocket):
@@ -1318,6 +1317,15 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                 payload = loaded.get("payload", {}) or {}
                 helpee_id = normalize_participant_id(payload.get("helpeeId", id))
                 helpee_profile = profile_manager.get_profile(helpee_id)
+                # Persist to the help queue so helpers who reconnect later (or
+                # whose WS missed the broadcast) still see the request via the
+                # `/helpQueue` poll. Dedup by id.
+                existing_ids = {
+                    (entry[0] if isinstance(entry, tuple) else entry)
+                    for entry in editor_manager.help_queue
+                }
+                if helpee_id not in existing_ids:
+                    editor_manager.help_queue.append((helpee_id, "quick"))
                 help_request_event = {
                     "event": "helpRequest",
                     "payload": {
@@ -1519,6 +1527,18 @@ async def save_profile(profile: ParticipantProfile):
     """Save participant profile to backend"""
     profile_manager.save_profile(profile)
 
+    # Broadcast so already-connected clients can add the new participant's tab
+    # without needing a reload.
+    pid_broadcast = profile.id.replace('"', '')
+    await socketManager.broadcast(json.dumps({
+        "event": "profileUpdate",
+        "payload": {
+            "id": pid_broadcast,
+            "name": profile.name,
+            "photo": profile.photo,
+        },
+    }))
+
     # Demo: When participant B registers, auto-mark calculate_order_cost as completed by B
     pid = profile.id.replace('"', '')
     if pid == "B":
@@ -1651,6 +1671,23 @@ async def detect_helper_from_code(body: dict):
         "suggestion": suggestion,
         "detectedConcepts": detected,
     }
+
+
+@app.post("/helpQueue/dismiss/{helpee_id}")
+async def dismiss_help_request(helpee_id: str):
+    """Remove a helpee from the help queue (called when any helper clicks
+    their 'X needs help' pill). Broadcasts so every connected client clears
+    the pill immediately, not just on the next poll."""
+    helpee_clean = normalize_participant_id(helpee_id)
+    editor_manager.help_queue = [
+        entry for entry in editor_manager.help_queue
+        if (entry[0] if isinstance(entry, tuple) else entry) != helpee_clean
+    ]
+    await socketManager.broadcast(json.dumps({
+        "event": "helpRequestDismissed",
+        "payload": {"helpeeId": helpee_clean},
+    }))
+    return {"status": "success", "helpeeId": helpee_clean}
 
 
 @app.get("/helpQueue")
