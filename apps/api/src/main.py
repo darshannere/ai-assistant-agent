@@ -1812,11 +1812,7 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
             if loaded["event"] == "updatePlayground":
                 print("updating playground", editor_manager.individual, loaded)
                 code = loaded["payload"]["doc"]
-                # Agent-mode helpers write to the helpee's slot by passing
-                # the target userId in the payload. Fall back to the sender
-                # id for normal self-edits.
-                target_id = loaded["payload"].get("userId") or id
-                editor_manager.update_individual(target_id, code)
+                editor_manager.update_individual(id, code)
                 event = {
                     "event": "monitorPlayground",
                     "payload": {"editors": editor_manager.individual},
