@@ -13,6 +13,7 @@ import re
 import sys
 import io
 import ast
+import difflib
 from textwrap import dedent
 import csv
 from collections import ChainMap, defaultdict
@@ -1886,7 +1887,8 @@ def _ai_generate_help_guidance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
           "corrected_code": "<full corrected function code>",
           "focus_explanation": "<1-2 sentence explanation of what to fix in the focus block only>",
           "helper_message": "<short message helper can say to helpee>",
-          "changed_lines": ["<line or block summary>", "..."]
+          "changed_lines": ["<line or block summary>", "..."],
+          "changed_line_ranges": [{{"start": 3, "end": 5}}]
         }}
 
         Constraints:
@@ -1949,12 +1951,46 @@ def _ai_generate_help_guidance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
     changed_lines = parsed.get("changed_lines")
     if not isinstance(changed_lines, list):
         changed_lines = [f"Refine {concept} logic around lines {focus_line_start}-{focus_line_end}."]
+    changed_line_ranges = parsed.get("changed_line_ranges")
+    normalized_ranges: List[Dict[str, int]] = []
+
+    if isinstance(changed_line_ranges, list):
+        for entry in changed_line_ranges:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                start = int(entry.get("start", 0))
+                end = int(entry.get("end", start))
+            except (TypeError, ValueError):
+                continue
+            if start <= 0:
+                continue
+            if end < start:
+                end = start
+            normalized_ranges.append({"start": start, "end": end})
+
+    if not normalized_ranges:
+        old_lines = helpee_function_code.splitlines()
+        new_lines = corrected_code.splitlines()
+        matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines)
+        for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+            if tag in ("replace", "insert") and j2 > j1:
+                normalized_ranges.append({"start": j1 + 1, "end": j2})
+            elif tag == "delete":
+                fallback_start = min(j1 + 1, len(new_lines)) if len(new_lines) > 0 else 1
+                normalized_ranges.append({"start": fallback_start, "end": fallback_start})
+
+    if not normalized_ranges:
+        normalized_ranges = [{"start": 1, "end": max(1, len(corrected_code.splitlines()))}]
 
     return {
         "corrected_code": corrected_code,
         "focus_explanation": (parsed.get("focus_explanation") or f"Focus on the {concept} block and keep the rest unchanged.").strip(),
         "helper_message": (parsed.get("helper_message") or "Talk through the highlighted lines and apply only the minimal fix.").strip(),
         "changed_lines": changed_lines,
+        "changed_line_ranges": normalized_ranges,
     }
 
 
@@ -2030,6 +2066,7 @@ async def _generate_help_guidance_for_session(helper_id: str, helpee_id: str):
             "focusExplanation": guidance.get("focus_explanation", ""),
             "helperMessage": guidance.get("helper_message", ""),
             "changedLines": guidance.get("changed_lines", []),
+            "changedLineRanges": guidance.get("changed_line_ranges", []),
         },
     })
     await socketManager.direct_message(ready_event, helper_clean)

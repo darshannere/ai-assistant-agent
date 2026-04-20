@@ -525,6 +525,54 @@ function createSelectedFunctionExtension(functionName: string) {
   });
 }
 
+function createDraftChangedLinesExtension(
+  draftCode: string,
+  changedLineRanges: Array<{ start: number; end: number }>
+) {
+  const buildDecorations = (state: EditorState) => {
+    if (!draftCode || changedLineRanges.length === 0) return Decoration.none;
+    const doc = state.doc.toString();
+    const draftStart = doc.indexOf(draftCode);
+    if (draftStart < 0) return Decoration.none;
+
+    const draftLines = draftCode.split('\n');
+    const lineOffsets: number[] = [];
+    let offset = 0;
+    for (const line of draftLines) {
+      lineOffsets.push(offset);
+      offset += line.length + 1;
+    }
+
+    const decorations = [];
+    for (const range of changedLineRanges) {
+      const start = Math.max(1, Math.min(range.start, draftLines.length));
+      const end = Math.max(start, Math.min(range.end, draftLines.length));
+      for (let lineNo = start; lineNo <= end; lineNo += 1) {
+        const rel = lineOffsets[lineNo - 1];
+        const abs = draftStart + rel;
+        const line = state.doc.lineAt(abs);
+        decorations.push(
+          Decoration.line({
+            attributes: {
+              style: 'background: rgba(254, 240, 138, 0.38); border-left: 3px solid rgba(245, 158, 11, 0.95);',
+            },
+          }).range(line.from)
+        );
+      }
+    }
+    return Decoration.set(decorations, true);
+  };
+
+  return StateField.define({
+    create(state) { return buildDecorations(state); },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      return buildDecorations(tr.state);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+}
+
 export default function Editor() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [personalCode, setPersonalCode] = useState("");
