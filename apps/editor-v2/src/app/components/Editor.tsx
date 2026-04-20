@@ -640,6 +640,7 @@ export default function Editor() {
     focusExplanation: string;
     helperMessage: string;
     changedLines: string[];
+    changedLineRanges: Array<{ start: number; end: number }>;
     concept: string;
   } | null>(null);
   const [autoStartingHelpFor, setAutoStartingHelpFor] = useState<string | null>(null);
@@ -728,7 +729,9 @@ export default function Editor() {
     });
     setCopilotSuggestion(null);
     setHelpeeFixHint(null);
-    setInlineHelpExtension([]);
+    setInlineHelpExtension([
+      createInlineHelpField(`${helperName} assist requested. Waiting for acceptance...`),
+    ]);
   }, [copilotSuggestion, personalCode, storedUserId]);
 
   const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python(), ...pythonIndent]);
@@ -861,6 +864,12 @@ export default function Editor() {
     () => helpeeFixHint?.focusCode ? [createFocusCodeExtension(helpeeFixHint.focusCode)] : [],
     [helpeeFixHint]
   );
+  const helperDraftChangedExtension = useMemo(
+    () => (helperGuidance?.correctedCode && helperGuidance?.changedLineRanges?.length)
+      ? [createDraftChangedLinesExtension(helperGuidance.correctedCode, helperGuidance.changedLineRanges)]
+      : [],
+    [helperGuidance]
+  );
   const copilotTabExtension = useMemo(
     () => Prec.high(keymap.of([{
       key: 'Tab',
@@ -915,8 +924,9 @@ export default function Editor() {
       runIconGutterTheme,
       ...inlineHelpExtension,
       ...helpeeFocusExtension,
+      ...helperDraftChangedExtension,
     ],
-    [personalEditorExtensions, copilotTabExtension, personalRunIconGutter, inlineHelpExtension, helpeeFocusExtension]
+    [personalEditorExtensions, copilotTabExtension, personalRunIconGutter, inlineHelpExtension, helpeeFocusExtension, helperDraftChangedExtension]
   );
 
   // Help session countdown timer (helpee side)
@@ -1177,6 +1187,7 @@ export default function Editor() {
               focusExplanation: payload.focusExplanation || '',
               helperMessage: payload.helperMessage || '',
               changedLines: payload.changedLines || [],
+              changedLineRanges: payload.changedLineRanges || [],
               concept: payload.concept || '',
             });
             if (typeof payload.correctedCode === 'string' && payload.correctedCode.trim()) {
@@ -1734,7 +1745,25 @@ export default function Editor() {
                       </div>
                     )}
                     {helpeeFixHint && (
-                      <div className={styles.helperCard} style={{ top: 92, border: '1px solid #22c55e', background: '#f0fdf4', minWidth: 260 }}>
+                      <div className={styles.helperCard} style={{ top: 92, border: '1px solid #22c55e', background: '#f0fdf4', minWidth: 260, paddingTop: 18 }}>
+                        <button
+                          onClick={() => setHelpeeFixHint(null)}
+                          aria-label="Close helper hint"
+                          style={{
+                            position: 'absolute',
+                            top: 6,
+                            right: 8,
+                            border: 'none',
+                            background: 'transparent',
+                            cursor: 'pointer',
+                            fontSize: 16,
+                            lineHeight: 1,
+                            color: '#166534',
+                            fontWeight: 700,
+                          }}
+                        >
+                          ×
+                        </button>
                         <div style={{ fontSize: 12, color: '#166534', fontWeight: 700, marginBottom: 4 }}>
                           Talk to {helpeeFixHint.helperName}
                         </div>
