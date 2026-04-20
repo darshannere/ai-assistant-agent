@@ -1935,7 +1935,17 @@ def _ai_generate_help_guidance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[help-guidance] generation failed: {exc}")
         parsed = {}
 
-    corrected_code = (parsed.get("corrected_code") or "").strip() or helpee_function_code
+    fallback_corrected = helpee_function_code
+    if solution_reference.strip() and focus_code.strip() and focus_code in helpee_function_code:
+        focus_lines = focus_code.splitlines()
+        leading_ws = re.match(r"^(\s*)", focus_lines[0]).group(1) if focus_lines else ""
+        normalized_solution = "\n".join(
+            (leading_ws + line if line.strip() else line)
+            for line in solution_reference.splitlines()
+        )
+        fallback_corrected = helpee_function_code.replace(focus_code, normalized_solution, 1)
+
+    corrected_code = (parsed.get("corrected_code") or "").strip() or fallback_corrected
     changed_lines = parsed.get("changed_lines")
     if not isinstance(changed_lines, list):
         changed_lines = [f"Refine {concept} logic around lines {focus_line_start}-{focus_line_end}."]
@@ -1954,7 +1964,11 @@ async def _generate_help_guidance_for_session(helper_id: str, helpee_id: str):
     key = _help_session_key(helper_clean, helpee_clean)
     session = editor_manager.active_help_context.get(key, {})
     if not session:
+        print(f"[help-guidance] no session context for key={key}")
         return
+    print(
+        f"[help-guidance] generating key={key} concept={session.get('concept','')} function={session.get('functionName','')}"
+    )
 
     await socketManager.direct_message(
         json.dumps({
@@ -2020,6 +2034,7 @@ async def _generate_help_guidance_for_session(helper_id: str, helpee_id: str):
     })
     await socketManager.direct_message(ready_event, helper_clean)
     await socketManager.direct_message(ready_event, helpee_clean)
+    print(f"[help-guidance] ready key={key}")
 
 
 @app.post("/helpQueue/dismiss/{helpee_id}")

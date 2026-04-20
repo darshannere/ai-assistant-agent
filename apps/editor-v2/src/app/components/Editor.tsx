@@ -43,26 +43,22 @@ class CopilotGhostCommentWidget extends WidgetType {
   ignoreEvent() { return true; }
 }
 
-function buildInlineHelpDecoration(state: EditorState, message: string, anchorText: string) {
-  if (!anchorText) return Decoration.none;
-  const doc = state.doc.toString();
-  const anchor = doc.indexOf(anchorText);
-  if (anchor < 0) return Decoration.none;
-  const anchorEnd = anchor + anchorText.length;
+function buildInlineHelpDecoration(state: EditorState, message: string) {
+  const cursorPos = state.selection.main.head;
   return Decoration.set([
     Decoration.widget({
       widget: new CopilotGhostCommentWidget(message),
       side: 1,
-    }).range(anchorEnd),
+    }).range(cursorPos),
   ]);
 }
 
-function createInlineHelpField(message: string, anchorText: string) {
+function createInlineHelpField(message: string) {
   return StateField.define({
-    create(state) { return buildInlineHelpDecoration(state, message, anchorText); },
+    create(state) { return buildInlineHelpDecoration(state, message); },
     update(decorations, tr) {
-      if (!tr.docChanged) return decorations.map(tr.changes);
-      return buildInlineHelpDecoration(tr.state, message, anchorText);
+      if (!tr.docChanged && !tr.selection) return decorations.map(tr.changes);
+      return buildInlineHelpDecoration(tr.state, message);
     },
     provide: (f) => EditorView.decorations.from(f),
   });
@@ -598,6 +594,7 @@ export default function Editor() {
     changedLines: string[];
     concept: string;
   } | null>(null);
+  const [autoStartingHelpFor, setAutoStartingHelpFor] = useState<string | null>(null);
 
   // Proactive helper suggestions (for app-shell helper list)
   const [helperSuggestions, setHelperSuggestions] = useState<Array<{
@@ -769,6 +766,32 @@ export default function Editor() {
         // backend may be temporarily unavailable
       });
   }, []);
+
+  // Auto-start help session when a helper opens a pending helpee tab.
+  useEffect(() => {
+    if (!activeTab || activeTab === 'team' || activeTab === storedUserId) return;
+    if (!pendingHelpIds.has(activeTab)) return;
+    if (activeHelpAsHelper?.helpeeId === activeTab) return;
+    if (autoStartingHelpFor === activeTab) return;
+
+    setAutoStartingHelpFor(activeTab);
+    fetch(`${BACKEND_URL}/StartHelpSession`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        helper: storedUserId,
+        helpeeId: activeTab,
+        time: 3,
+        hint: 'Auto-started from helper view.',
+      }),
+    })
+      .catch((error) => {
+        console.error('Failed to auto-start help session:', error);
+      })
+      .finally(() => {
+        setAutoStartingHelpFor((prev) => (prev === activeTab ? null : prev));
+      });
+  }, [activeTab, storedUserId, pendingHelpIds, activeHelpAsHelper, autoStartingHelpFor]);
 
   const getParticipantProfile = useCallback((participantId: string) => {
     return participantProfiles[participantId] || { name: participantId, photo: null };
@@ -1178,8 +1201,7 @@ export default function Editor() {
               });
               setInlineHelpExtension([
                 createInlineHelpField(
-                  `${suggestion.helperName} can help with ${conceptLabel}. Press Tab to request peer assist.`,
-                  anchor
+                  `${suggestion.helperName} can help with ${conceptLabel}. Press Tab to request peer assist.`
                 ),
               ]);
             }
