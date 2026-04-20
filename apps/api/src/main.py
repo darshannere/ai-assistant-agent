@@ -23,10 +23,12 @@ import json
 import study_problem_sol
 from datetime import datetime, timedelta
 import time as _time
-import google.generativeai as genai
 from openai import OpenAI
 from concept_reference_map import CONCEPT_REFERENCE_TEMPLATES
+from dotenv import load_dotenv
 app = FastAPI()
+
+load_dotenv()
 
 app.add_middleware(
     CORSMiddleware,
@@ -510,8 +512,6 @@ class EditorManager:
         self.generated_help_drafts: Dict[str, Dict[str, Any]] = {}
         self.participant_concepts: Dict[str, List[str]] = {}  # accumulated concepts per participant
         self.participant_concept_evidence: Dict[str, Dict[str, List[Dict]]] = {}
-        # client = genai.Client(api_key="")
-        # self.client = client
         client = OpenAI(
             api_key=os.environ["OPENROUTER_API_KEY"],
             base_url="https://openrouter.ai/api/v1"
