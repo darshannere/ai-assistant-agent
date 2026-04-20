@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Response
-from typing import Dict, Callable, List, Optional
+from typing import Dict, Callable, List, Optional, Any
 from pydantic import BaseModel
 import subprocess
 import re
@@ -409,6 +409,13 @@ class HelpRequest(BaseModel):
     helper: str
     time: int
     hint: str = "this is hint"
+    helpeeId: Optional[str] = None
+
+
+class HelpShareBody(BaseModel):
+    helperId: str
+    helpeeId: str
+    code: str
 
 class EditorManager:
     def __init__(self):
@@ -417,6 +424,9 @@ class EditorManager:
         self.profiles = {}
         self.help_queue = []
         self.active_help_sessions: List[Dict] = []  # tracks who is helping whom
+        self.pending_help_context: Dict[str, Dict[str, Any]] = {}
+        self.active_help_context: Dict[str, Dict[str, Any]] = {}
+        self.generated_help_drafts: Dict[str, Dict[str, Any]] = {}
         self.participant_concepts: Dict[str, List[str]] = {}  # accumulated concepts per participant
         self.participant_concept_evidence: Dict[str, Dict[str, List[Dict]]] = {}
         # client = genai.Client(api_key="")
@@ -1067,48 +1077,116 @@ def stop_timer(request: Request):
 
 @app.post("/StartHelpSession")
 async def start_help_session(body: HelpRequest):
-    helper=body.helper
-    time=body.time
-    hint=body.hint
+    helper_clean = normalize_participant_id(body.helper)
+    requested_helpee = normalize_participant_id(body.helpeeId or "")
+    hint = body.hint
+    duration_seconds = body.time * 60
+
+    queue_target = requested_helpee
+    if not queue_target and editor_manager.help_queue:
+        queue_target = _queue_entry_parts(editor_manager.help_queue[0])[0]
+    if not queue_target:
+        return {"status": "failure", "message": "No helpee in queue"}
+
+    queue_idx, helpee_clean, _help_type = _find_help_queue_entry(queue_target)
+    if queue_idx is None or not helpee_clean:
+        return {"status": "failure", "message": f"Helpee '{queue_target}' is not in queue"}
+
     connected_ids = {
-        conn.id for conn in socketManager.connections if conn.id != "control"
+        normalize_participant_id(conn.id)
+        for conn in socketManager.connections
+        if conn.id != "control"
     }
-    helpee = editor_manager.help_queue[0][0]
-
-    if helpee in connected_ids and helper in connected_ids:
-        event = {
-            "event": "StartHelpSession",
-            "payload": {
-                "helpee": helpee,
-                "helper": helper,
-                "time": time * 60,
-                "hint": hint,
-            },
-        }
-        await socketManager.broadcast(json.dumps(event))
-        print("Starting help session between helpee ", helpee, "and helper ", helper)
-        print(event)
-        editor_manager.help_queue.pop(0)
-        # Track the active help session
-        helper_clean = helper.replace('"', '')
-        helpee_clean = helpee.replace('"', '')
-        helper_profile = profile_manager.get_profile(helper_clean)
-        helpee_profile = profile_manager.get_profile(helpee_clean)
-        editor_manager.active_help_sessions.append({
-            "helperId": helper_clean,
-            "helperName": helper_profile.name if helper_profile else helper_clean,
-            "helperPhoto": helper_profile.photo if helper_profile else None,
-            "helpeeId": helpee_clean,
-            "helpeeName": helpee_profile.name if helpee_profile else helpee_clean,
-            "helpeePhoto": helpee_profile.photo if helpee_profile else None,
-            "duration": time * 60,
-            "startedAt": int(_time.time()),
-        })
-        print(editor_manager.help_queue)
-        return {"status": "success"}
-
-    else:
+    if helpee_clean not in connected_ids or helper_clean not in connected_ids:
         return {"status": "failure", "message": "One or both users not connected"}
+
+    # Build fine-grained help context for generation.
+    pending_context = editor_manager.pending_help_context.get(helpee_clean, {})
+    current_task = (
+        editor_manager.profiles.get(f'"{helpee_clean}"', "")
+        or editor_manager.profiles.get(helpee_clean, "")
+        or ""
+    )
+    helpee_code = editor_manager.individual.get(helpee_clean, "")
+    focus = _extract_focus_for_concept(
+        current_task=current_task,
+        helpee_code=helpee_code,
+        concept=_select_help_concept(
+            helper_id=helper_clean,
+            helpee_id=helpee_clean,
+            current_task=current_task,
+            helpee_function_code=helpee_code,
+            pending_context=pending_context,
+        ),
+    )
+    concept = _select_help_concept(
+        helper_id=helper_clean,
+        helpee_id=helpee_clean,
+        current_task=current_task,
+        helpee_function_code=focus.get("function_code", helpee_code),
+        pending_context=pending_context,
+    )
+    helper_evidence = _select_helper_evidence(
+        helper_id=helper_clean,
+        concept=concept,
+        function_name=focus.get("function_name", ""),
+    )
+    solution_reference = helper_evidence.get("solution_reference") or CONCEPT_REFERENCE_TEMPLATES.get(
+        focus.get("function_name", ""), {}
+    ).get(concept, {}).get("solution_snippet", "")
+
+    session_key = _help_session_key(helper_clean, helpee_clean)
+    editor_manager.active_help_context[session_key] = {
+        "helperId": helper_clean,
+        "helpeeId": helpee_clean,
+        "functionName": focus.get("function_name", ""),
+        "concept": concept,
+        "focusLineStart": focus.get("line_start", 1),
+        "focusLineEnd": focus.get("line_end", 1),
+        "focusCode": focus.get("focus_code", ""),
+        "helpeeFunctionCode": focus.get("function_code", ""),
+        "helperEvidenceCode": helper_evidence.get("code", ""),
+        "solutionReference": solution_reference,
+        "hint": hint or pending_context.get("message", ""),
+        "createdAt": int(_time.time()),
+    }
+
+    event = {
+        "event": "StartHelpSession",
+        "payload": {
+            "helpee": helpee_clean,
+            "helper": helper_clean,
+            "time": duration_seconds,
+            "hint": hint,
+            "concept": concept,
+            "function": focus.get("function_name", ""),
+            "sessionKey": session_key,
+        },
+    }
+    await socketManager.broadcast(json.dumps(event))
+
+    # Remove the specific helpee from queue.
+    editor_manager.help_queue.pop(queue_idx)
+    editor_manager.pending_help_context.pop(helpee_clean, None)
+
+    # Track the active help session.
+    helper_profile = profile_manager.get_profile(helper_clean)
+    helpee_profile = profile_manager.get_profile(helpee_clean)
+    editor_manager.active_help_sessions.append({
+        "helperId": helper_clean,
+        "helperName": helper_profile.name if helper_profile else helper_clean,
+        "helperPhoto": helper_profile.photo if helper_profile else None,
+        "helpeeId": helpee_clean,
+        "helpeeName": helpee_profile.name if helpee_profile else helpee_clean,
+        "helpeePhoto": helpee_profile.photo if helpee_profile else None,
+        "duration": duration_seconds,
+        "startedAt": int(_time.time()),
+        "sessionKey": session_key,
+    })
+
+    # Kick off guidance generation asynchronously.
+    asyncio.create_task(_generate_help_guidance_for_session(helper_clean, helpee_clean))
+    return {"status": "success", "sessionKey": session_key, "concept": concept}
 
 
 @app.post("/notify")
@@ -1322,11 +1400,20 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                 payload = loaded.get("payload", {}) or {}
                 helpee_id = normalize_participant_id(payload.get("helpeeId", id))
                 helpee_profile = profile_manager.get_profile(helpee_id)
+                editor_manager.pending_help_context[helpee_id] = {
+                    "requestedBy": helpee_id,
+                    "recommendedHelperId": normalize_participant_id(payload.get("helperId", "")),
+                    "concept": payload.get("concept", ""),
+                    "anchorKeyword": payload.get("anchorKeyword", ""),
+                    "functionName": payload.get("functionName", ""),
+                    "message": payload.get("message", ""),
+                    "requestedAt": int(_time.time()),
+                }
                 # Persist to the help queue so helpers who reconnect later (or
                 # whose WS missed the broadcast) still see the request via the
                 # `/helpQueue` poll. Dedup by id.
                 existing_ids = {
-                    (entry[0] if isinstance(entry, tuple) else entry)
+                    normalize_participant_id(entry[0] if isinstance(entry, tuple) else entry)
                     for entry in editor_manager.help_queue
                 }
                 if helpee_id not in existing_ids:
@@ -1337,6 +1424,10 @@ async def websocket_text_endpoint(websocket: WebSocket, id: str):
                         "helpeeId": helpee_id,
                         "helpeeName": helpee_profile.name if helpee_profile else payload.get("helpeeName", helpee_id),
                         "helpeePhoto": helpee_profile.photo if helpee_profile else payload.get("helpeePhoto"),
+                        "helperId": payload.get("helperId"),
+                        "concept": payload.get("concept"),
+                        "anchorKeyword": payload.get("anchorKeyword"),
+                        "functionName": payload.get("functionName"),
                     },
                 }
                 await socketManager.broadcast(json.dumps(help_request_event))
@@ -1662,6 +1753,275 @@ async def detect_helper_from_code(body: dict):
     }
 
 
+def _help_session_key(helper_id: str, helpee_id: str) -> str:
+    helper_clean = normalize_participant_id(helper_id)
+    helpee_clean = normalize_participant_id(helpee_id)
+    return f"{helper_clean}::{helpee_clean}"
+
+
+def _queue_entry_parts(entry: Any) -> tuple[str, str]:
+    if isinstance(entry, tuple):
+        return normalize_participant_id(entry[0]), entry[1]
+    return normalize_participant_id(entry), "quick"
+
+
+def _find_help_queue_entry(helpee_id: str) -> tuple[Optional[int], Optional[str], Optional[str]]:
+    helpee_clean = normalize_participant_id(helpee_id)
+    for idx, entry in enumerate(editor_manager.help_queue):
+        entry_id, help_type = _queue_entry_parts(entry)
+        if entry_id == helpee_clean:
+            return idx, entry_id, help_type
+    return None, None, None
+
+
+def _select_help_concept(
+    helper_id: str,
+    helpee_id: str,
+    current_task: str,
+    helpee_function_code: str,
+    pending_context: Dict[str, Any],
+) -> str:
+    helper_known = set(editor_manager.participant_concepts.get(helper_id, []))
+    requested = (pending_context.get("concept") or "").strip()
+    if requested and (not helper_known or requested in helper_known):
+        return requested
+
+    task_concepts = []
+    if current_task in graph_manager.graph:
+        task_concepts = [c.strip() for c in graph_manager.graph[current_task].concepts.split(",") if c.strip()]
+
+    overlap = [c for c in task_concepts if c in helper_known] if helper_known else task_concepts
+    if overlap:
+        return overlap[0]
+
+    detected = detect_concepts_from_code(helpee_function_code)
+    for concept in detected:
+        if not helper_known or concept in helper_known:
+            return concept
+
+    return requested or (task_concepts[0] if task_concepts else "Looping")
+
+
+def _extract_focus_for_concept(current_task: str, helpee_code: str, concept: str) -> Dict[str, Any]:
+    function_map = parse_top_level_functions(helpee_code)
+    function_name = current_task if current_task in function_map else ""
+    if not function_name and function_map:
+        function_name = next(iter(function_map.keys()))
+    function_code = function_map.get(function_name, helpee_code).strip()
+
+    inferred = infer_concept_reference(function_name, concept, function_code) if function_name else {
+        "line_start": 1,
+        "line_end": len(function_code.splitlines()) if function_code else 1,
+        "code": function_code,
+        "solution_reference": "",
+    }
+    return {
+        "function_name": function_name,
+        "function_code": function_code,
+        "line_start": inferred.get("line_start", 1),
+        "line_end": inferred.get("line_end", 1),
+        "focus_code": inferred.get("code", function_code),
+    }
+
+
+def _select_helper_evidence(helper_id: str, concept: str, function_name: str) -> Dict[str, Any]:
+    store = editor_manager.participant_concept_evidence.get(helper_id, {})
+    entries = store.get(concept, [])
+    if not entries:
+        return {
+            "function": function_name,
+            "code": "",
+            "line_start": 1,
+            "line_end": 1,
+            "solution_reference": CONCEPT_REFERENCE_TEMPLATES.get(function_name, {}).get(concept, {}).get("solution_snippet", ""),
+        }
+
+    same_fn = [entry for entry in entries if entry.get("function") == function_name]
+    selected = same_fn[0] if same_fn else entries[0]
+    return {
+        "function": selected.get("function", function_name),
+        "code": selected.get("code", ""),
+        "line_start": selected.get("line_start", 1),
+        "line_end": selected.get("line_end", 1),
+        "solution_reference": selected.get("solution_reference", ""),
+    }
+
+
+def _extract_first_json_obj(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    block_match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
+    if block_match:
+        try:
+            return json.loads(block_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    object_match = re.search(r"(\{[\s\S]*\})", text)
+    if object_match:
+        try:
+            return json.loads(object_match.group(1))
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _ai_generate_help_guidance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
+    helper_id = payload["helper_id"]
+    helpee_id = payload["helpee_id"]
+    concept = payload["concept"]
+    function_name = payload["function_name"]
+    helpee_function_code = payload["helpee_function_code"]
+    focus_code = payload["focus_code"]
+    focus_line_start = payload["focus_line_start"]
+    focus_line_end = payload["focus_line_end"]
+    helper_evidence = payload["helper_evidence"]
+    solution_reference = payload["solution_reference"]
+
+    prompt = dedent(
+        f"""
+        You are generating peer-assist guidance for Python code review.
+        Return ONLY JSON with this schema:
+        {{
+          "corrected_code": "<full corrected function code>",
+          "focus_explanation": "<1-2 sentence explanation of what to fix in the focus block only>",
+          "helper_message": "<short message helper can say to helpee>",
+          "changed_lines": ["<line or block summary>", "..."]
+        }}
+
+        Constraints:
+        - Keep changes minimal and fine-grained.
+        - Preserve all working parts; only change code needed for the target concept.
+        - Keep function signature unchanged.
+        - Do not rewrite unrelated code.
+
+        Context:
+        helper_id={helper_id}
+        helpee_id={helpee_id}
+        target_concept={concept}
+        target_function={function_name}
+        helpee_focus_lines={focus_line_start}-{focus_line_end}
+
+        Helpee function code:
+        ```python
+        {helpee_function_code}
+        ```
+
+        Helpee focus block:
+        ```python
+        {focus_code}
+        ```
+
+        Helper's previous implementation evidence:
+        ```python
+        {helper_evidence}
+        ```
+
+        Official solution reference snippet:
+        ```python
+        {solution_reference}
+        ```
+        """
+    ).strip()
+
+    try:
+        response = editor_manager.client.chat.completions.create(
+            model="google/gemini-2.0-flash-001",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        content = (response.choices[0].message.content or "").strip()
+        parsed = _extract_first_json_obj(content)
+    except Exception as exc:
+        print(f"[help-guidance] generation failed: {exc}")
+        parsed = {}
+
+    corrected_code = (parsed.get("corrected_code") or "").strip() or helpee_function_code
+    changed_lines = parsed.get("changed_lines")
+    if not isinstance(changed_lines, list):
+        changed_lines = [f"Refine {concept} logic around lines {focus_line_start}-{focus_line_end}."]
+
+    return {
+        "corrected_code": corrected_code,
+        "focus_explanation": (parsed.get("focus_explanation") or f"Focus on the {concept} block and keep the rest unchanged.").strip(),
+        "helper_message": (parsed.get("helper_message") or "Talk through the highlighted lines and apply only the minimal fix.").strip(),
+        "changed_lines": changed_lines,
+    }
+
+
+async def _generate_help_guidance_for_session(helper_id: str, helpee_id: str):
+    helper_clean = normalize_participant_id(helper_id)
+    helpee_clean = normalize_participant_id(helpee_id)
+    key = _help_session_key(helper_clean, helpee_clean)
+    session = editor_manager.active_help_context.get(key, {})
+    if not session:
+        return
+
+    await socketManager.direct_message(
+        json.dumps({
+            "event": "helpGuidanceGenerating",
+            "payload": {
+                "helperId": helper_clean,
+                "helpeeId": helpee_clean,
+                "concept": session.get("concept", ""),
+                "function": session.get("functionName", ""),
+            },
+        }),
+        helper_clean,
+    )
+
+    await socketManager.direct_message(
+        json.dumps({
+            "event": "helpAccepted",
+            "payload": {
+                "helperId": helper_clean,
+                "helpeeId": helpee_clean,
+                "concept": session.get("concept", ""),
+            },
+        }),
+        helpee_clean,
+    )
+
+    guidance = await asyncio.to_thread(
+        _ai_generate_help_guidance_sync,
+        {
+            "helper_id": helper_clean,
+            "helpee_id": helpee_clean,
+            "concept": session.get("concept", ""),
+            "function_name": session.get("functionName", ""),
+            "helpee_function_code": session.get("helpeeFunctionCode", ""),
+            "focus_code": session.get("focusCode", ""),
+            "focus_line_start": session.get("focusLineStart", 1),
+            "focus_line_end": session.get("focusLineEnd", 1),
+            "helper_evidence": session.get("helperEvidenceCode", ""),
+            "solution_reference": session.get("solutionReference", ""),
+        },
+    )
+
+    session["guidance"] = guidance
+    editor_manager.generated_help_drafts[key] = guidance
+
+    ready_event = json.dumps({
+        "event": "helpGuidanceReady",
+        "payload": {
+            "helperId": helper_clean,
+            "helpeeId": helpee_clean,
+            "function": session.get("functionName", ""),
+            "concept": session.get("concept", ""),
+            "focusLineStart": session.get("focusLineStart", 1),
+            "focusLineEnd": session.get("focusLineEnd", 1),
+            "focusCode": session.get("focusCode", ""),
+            "helperEvidenceCode": session.get("helperEvidenceCode", ""),
+            "solutionReference": session.get("solutionReference", ""),
+            "correctedCode": guidance.get("corrected_code", ""),
+            "focusExplanation": guidance.get("focus_explanation", ""),
+            "helperMessage": guidance.get("helper_message", ""),
+            "changedLines": guidance.get("changed_lines", []),
+        },
+    })
+    await socketManager.direct_message(ready_event, helper_clean)
+    await socketManager.direct_message(ready_event, helpee_clean)
+
+
 @app.post("/helpQueue/dismiss/{helpee_id}")
 async def dismiss_help_request(helpee_id: str):
     """Remove a helpee from the help queue (called when any helper clicks
@@ -1672,6 +2032,7 @@ async def dismiss_help_request(helpee_id: str):
         entry for entry in editor_manager.help_queue
         if (entry[0] if isinstance(entry, tuple) else entry) != helpee_clean
     ]
+    editor_manager.pending_help_context.pop(helpee_clean, None)
     await socketManager.broadcast(json.dumps({
         "event": "helpRequestDismissed",
         "payload": {"helpeeId": helpee_clean},
@@ -1703,6 +2064,7 @@ def get_help_queue():
                 for c in graph_manager.graph[current_task].concepts.split(",")
                 if c.strip()
             ]
+        pending = editor_manager.pending_help_context.get(pid_clean, {})
         queue_items.append({
             "id": pid_clean,
             "name": profile.name if profile else pid_clean,
@@ -1710,6 +2072,9 @@ def get_help_queue():
             "helpType": help_type,
             "currentTask": current_task or None,
             "taskConcepts": task_concepts,
+            "requestedConcept": pending.get("concept", ""),
+            "recommendedHelperId": pending.get("recommendedHelperId", ""),
+            "anchorKeyword": pending.get("anchorKeyword", ""),
         })
 
     # Also return all connected participant IDs (excluding control)
@@ -1733,6 +2098,36 @@ def get_help_queue():
     }
 
 
+@app.post("/help/share")
+async def share_help_to_helpee(body: HelpShareBody):
+    helper_id = normalize_participant_id(body.helperId)
+    helpee_id = normalize_participant_id(body.helpeeId)
+    shared_code = body.code
+
+    if not helper_id or not helpee_id or not shared_code.strip():
+        return {"status": "error", "message": "Missing helperId, helpeeId, or code."}
+
+    session_key = _help_session_key(helper_id, helpee_id)
+    if session_key not in editor_manager.active_help_context:
+        return {"status": "error", "message": "No active help context for this helper/helpee pair."}
+
+    editor_manager.update_individual(helpee_id, shared_code)
+    await socketManager.broadcast(json.dumps({
+        "event": "monitorPlayground",
+        "payload": {"editors": editor_manager.individual},
+    }))
+
+    await socketManager.broadcast(json.dumps({
+        "event": "helpDraftShared",
+        "payload": {
+            "helperId": helper_id,
+            "helpeeId": helpee_id,
+            "code": shared_code,
+        },
+    }))
+    return {"status": "success", "sessionKey": session_key}
+
+
 @app.get("/profiles")
 def get_all_profiles():
     """Get all participant profiles"""
@@ -1749,6 +2144,9 @@ async def clear_participants():
         "active_profiles": len(editor_manager.profiles),
         "help_queue": len(editor_manager.help_queue),
         "active_help_sessions": len(editor_manager.active_help_sessions),
+        "pending_help_context": len(editor_manager.pending_help_context),
+        "active_help_context": len(editor_manager.active_help_context),
+        "generated_help_drafts": len(editor_manager.generated_help_drafts),
         "participant_concepts": len(editor_manager.participant_concepts),
         "participant_concept_evidence": len(editor_manager.participant_concept_evidence),
         "cursors": len(cursor_positions),
@@ -1759,6 +2157,9 @@ async def clear_participants():
     editor_manager.profiles.clear()
     editor_manager.help_queue.clear()
     editor_manager.active_help_sessions.clear()
+    editor_manager.pending_help_context.clear()
+    editor_manager.active_help_context.clear()
+    editor_manager.generated_help_drafts.clear()
     editor_manager.participant_concepts.clear()
     editor_manager.participant_concept_evidence.clear()
     editor_manager.master = ""
@@ -1813,7 +2214,12 @@ async def reply_to_notif(body: ReplyBody):
     # user_response(body.id, body.choice)
     print(body.id, body.choice)
     if body.choice == "Help":
-        if body.id not in editor_manager.help_queue:
+        body_id_clean = normalize_participant_id(body.id)
+        queue_ids = {
+            _queue_entry_parts(entry)[0]
+            for entry in editor_manager.help_queue
+        }
+        if body_id_clean not in queue_ids:
             editor_manager.help_queue.append(body.id)
         print("help queu is ", editor_manager.help_queue)
         await editor_manager.send_notification(body.id, task="", done=False)
@@ -1832,8 +2238,9 @@ async def reply_to_help(body: ReplyBody):
 
     if helpType != "none":
         # Check if id is already in the queue
-        for idx, (existing_id, _) in enumerate(editor_manager.help_queue):
-            if existing_id == body.id:
+        for idx, entry in enumerate(editor_manager.help_queue):
+            existing_id, _ = _queue_entry_parts(entry)
+            if existing_id == normalize_participant_id(body.id):
                 # Update the existing entry
                 editor_manager.help_queue[idx] = (body.id, helpType)
                 break
@@ -1877,8 +2284,10 @@ async def _monitor_progress_loop():
                     value.start_time is not None
                     and get_time_diff(value.start_time) > 150
                     and value.work_status == 1
-                    and len([t for t in editor_manager.help_queue if t[0] ==
-                             value.claimed_by]) == 0
+                    and len([
+                        t for t in editor_manager.help_queue
+                        if _queue_entry_parts(t)[0] == normalize_participant_id(value.claimed_by)
+                    ]) == 0
                 ):
                     await editor_manager.send_notification(value.claimed_by, "", False)
                     graph_manager.graph[key].start_time = datetime.now()

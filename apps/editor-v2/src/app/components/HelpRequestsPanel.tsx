@@ -96,7 +96,7 @@ export default function HelpRequestsPanel({ onQueueUpdate }: Props) {
       await fetch(`${BACKEND_URL}/StartHelpSession`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ helper: storedUserId, time: 3, hint: '' }),
+        body: JSON.stringify({ helper: storedUserId, helpeeId, time: 3, hint: '' }),
       });
       fetchData();
     } catch (e) {

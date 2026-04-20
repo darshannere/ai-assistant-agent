@@ -36,7 +36,7 @@ const CollaborativeOpportunityModal = ({ onClose, predictions, context, id, help
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ helper, time, hint }),
+        body: JSON.stringify({ helper, helpeeId: helpeeProfile?.id || '', time, hint }),
       });
 
       const data = await response.json();

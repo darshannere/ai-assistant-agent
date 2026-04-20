@@ -13,84 +13,37 @@ import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import GraphComponent from './SMM';
 import { ReactFlowProvider } from '@xyflow/react';
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
-import { Extension, StateField, EditorState, RangeSetBuilder } from "@codemirror/state";
+import { Extension, StateField, EditorState, RangeSetBuilder, Prec } from "@codemirror/state";
 import { createPersonalEditorUpdateExtension } from './modals/extension';
 import HelpSessionStartedModal from './modals/HelpSessionModal';
 import { BACKEND_URL, WS_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
 
-// --- Inline Help Widget (shows "X can help with Y" badge inline in code) ---
-class InlineHelpWidget extends WidgetType {
-  constructor(private readonly text: string, private readonly mode: 'suggestion' | 'pending' = 'suggestion') { super(); }
+// --- Copilot-style ghost comment widget (visual hint only; does not alter code) ---
+class CopilotGhostCommentWidget extends WidgetType {
+  constructor(private readonly text: string) { super(); }
   toDOM() {
     const wrap = document.createElement("span");
-    wrap.style.marginLeft = "12px";
+    wrap.style.marginLeft = "10px";
     wrap.style.display = "inline-flex";
     wrap.style.alignItems = "center";
-    wrap.style.gap = "4px";
-    wrap.style.verticalAlign = "middle";
-
-    const btn = document.createElement("button");
-    btn.style.padding = "4px 12px";
-    btn.style.borderRadius = "6px";
-    btn.style.border = "none";
-    btn.style.fontSize = "13px";
-    btn.style.fontWeight = "600";
-    btn.style.lineHeight = "1.4";
-    btn.style.fontFamily = "inherit";
-
-    if (this.mode === 'pending') {
-      btn.style.background = "#f59e0b";
-      btn.style.color = "#ffffff";
-      btn.style.cursor = "default";
-      btn.style.boxShadow = "0 1px 3px rgba(0, 0, 0, 0.15)";
-      btn.textContent = `🧑‍💻 ${this.text}`;
-      wrap.appendChild(btn);
-      return wrap;
-    }
-
-    btn.style.background = "#1f2937";
-    btn.style.color = "#ffffff";
-    btn.style.cursor = "pointer";
-    btn.style.boxShadow = "0 2px 6px rgba(0, 0, 0, 0.25)";
-    btn.textContent = `🧑‍💻 ${this.text}`;
-    btn.addEventListener("mouseenter", () => { btn.style.background = "#374151"; });
-    btn.addEventListener("mouseleave", () => { btn.style.background = "#1f2937"; });
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      document.dispatchEvent(new CustomEvent("inline-help-click"));
-    });
-    wrap.appendChild(btn);
-
-    const close = document.createElement("button");
-    close.textContent = "×";
-    close.title = "Dismiss";
-    close.setAttribute("aria-label", "Dismiss inline help suggestion");
-    close.style.padding = "0 6px";
-    close.style.border = "none";
-    close.style.background = "transparent";
-    close.style.color = "#6b7280";
-    close.style.fontSize = "16px";
-    close.style.lineHeight = "1";
-    close.style.cursor = "pointer";
-    close.style.fontFamily = "inherit";
-    close.addEventListener("mouseenter", () => { close.style.color = "#111827"; });
-    close.addEventListener("mouseleave", () => { close.style.color = "#6b7280"; });
-    close.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      document.dispatchEvent(new CustomEvent("inline-help-dismiss"));
-    });
-    wrap.appendChild(close);
-
+    wrap.style.padding = "0 8px";
+    wrap.style.borderRadius = "6px";
+    wrap.style.background = "rgba(148, 163, 184, 0.10)";
+    wrap.style.border = "1px dashed rgba(100, 116, 139, 0.45)";
+    wrap.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+    wrap.style.fontSize = "12px";
+    wrap.style.fontStyle = "italic";
+    wrap.style.color = "#64748b";
+    wrap.style.lineHeight = "1.8";
+    wrap.textContent = `# ${this.text}`;
     return wrap;
   }
-  eq(other: InlineHelpWidget) { return this.text === other.text && this.mode === other.mode; }
-  ignoreEvent() { return false; }
+  eq(other: CopilotGhostCommentWidget) { return this.text === other.text; }
+  ignoreEvent() { return true; }
 }
 
-function buildInlineHelpDecoration(state: EditorState, message: string, anchorText: string, mode: 'suggestion' | 'pending' = 'suggestion') {
+function buildInlineHelpDecoration(state: EditorState, message: string, anchorText: string) {
   if (!anchorText) return Decoration.none;
   const doc = state.doc.toString();
   const anchor = doc.indexOf(anchorText);
@@ -98,18 +51,18 @@ function buildInlineHelpDecoration(state: EditorState, message: string, anchorTe
   const anchorEnd = anchor + anchorText.length;
   return Decoration.set([
     Decoration.widget({
-      widget: new InlineHelpWidget(message, mode),
+      widget: new CopilotGhostCommentWidget(message),
       side: 1,
     }).range(anchorEnd),
   ]);
 }
 
-function createInlineHelpField(message: string, anchorText: string, mode: 'suggestion' | 'pending' = 'suggestion') {
+function createInlineHelpField(message: string, anchorText: string) {
   return StateField.define({
-    create(state) { return buildInlineHelpDecoration(state, message, anchorText, mode); },
+    create(state) { return buildInlineHelpDecoration(state, message, anchorText); },
     update(decorations, tr) {
       if (!tr.docChanged) return decorations.map(tr.changes);
-      return buildInlineHelpDecoration(tr.state, message, anchorText, mode);
+      return buildInlineHelpDecoration(tr.state, message, anchorText);
     },
     provide: (f) => EditorView.decorations.from(f),
   });
@@ -394,6 +347,188 @@ function replaceEditorDoc(view: EditorView, nextDoc: string) {
   });
 }
 
+class FunctionOwnerWidget extends WidgetType {
+  constructor(
+    private readonly ownerName: string,
+    private readonly ownerPhoto: string | null,
+    private readonly isOwnedByMe: boolean
+  ) { super(); }
+
+  toDOM() {
+    const wrap = document.createElement('span');
+    wrap.style.display = 'inline-flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '6px';
+    wrap.style.marginRight = '8px';
+    wrap.style.padding = '1px 8px';
+    wrap.style.borderRadius = '999px';
+    wrap.style.fontSize = '11px';
+    wrap.style.fontWeight = '700';
+    wrap.style.verticalAlign = 'middle';
+    wrap.style.background = this.isOwnedByMe ? '#dbeafe' : '#f1f5f9';
+    wrap.style.color = this.isOwnedByMe ? '#1d4ed8' : '#475569';
+    wrap.style.border = this.isOwnedByMe ? '1px solid #93c5fd' : '1px solid #cbd5e1';
+
+    if (this.ownerPhoto) {
+      const img = document.createElement('img');
+      img.src = this.ownerPhoto;
+      img.alt = this.ownerName;
+      img.style.width = '14px';
+      img.style.height = '14px';
+      img.style.borderRadius = '50%';
+      img.style.objectFit = 'cover';
+      wrap.appendChild(img);
+    } else {
+      const fallback = document.createElement('span');
+      fallback.textContent = this.ownerName.charAt(0).toUpperCase();
+      fallback.style.width = '14px';
+      fallback.style.height = '14px';
+      fallback.style.display = 'inline-flex';
+      fallback.style.alignItems = 'center';
+      fallback.style.justifyContent = 'center';
+      fallback.style.borderRadius = '50%';
+      fallback.style.background = this.isOwnedByMe ? '#2563eb' : '#94a3b8';
+      fallback.style.color = '#fff';
+      fallback.style.fontSize = '9px';
+      wrap.appendChild(fallback);
+    }
+
+    const text = document.createElement('span');
+    text.textContent = `${this.ownerName} editing`;
+    wrap.appendChild(text);
+    return wrap;
+  }
+
+  eq(other: FunctionOwnerWidget) {
+    return (
+      other.ownerName === this.ownerName
+      && other.ownerPhoto === this.ownerPhoto
+      && other.isOwnedByMe === this.isOwnedByMe
+    );
+  }
+}
+
+function createTeamOwnershipExtension(
+  taskOwnerByFunction: Record<string, string>,
+  participantProfiles: Record<string, ParticipantProfile>,
+  currentUserId: string,
+) {
+  return StateField.define({
+    create(state) {
+      const doc = state.doc.toString();
+      const ranges = getFunctionRanges(doc);
+      const decorations = [];
+      for (const range of ranges) {
+        const ownerId = taskOwnerByFunction[range.name];
+        if (!ownerId) continue;
+        const isMine = ownerId === currentUserId;
+        const profile = participantProfiles[ownerId] || { name: ownerId, photo: null };
+        const markStyle = isMine
+          ? 'background-color: rgba(59,130,246,0.10); border-left: 3px solid rgba(59,130,246,0.70);'
+          : 'background-color: rgba(148,163,184,0.12); border-left: 3px solid rgba(100,116,139,0.55);';
+        decorations.push(
+          Decoration.mark({ attributes: { style: markStyle } }).range(range.from, range.to),
+          Decoration.widget({
+            widget: new FunctionOwnerWidget(profile.name || ownerId, profile.photo || null, isMine),
+            side: -1,
+          }).range(range.from),
+        );
+      }
+      return Decoration.set(decorations, true);
+    },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      const doc = tr.state.doc.toString();
+      const ranges = getFunctionRanges(doc);
+      const next = [];
+      for (const range of ranges) {
+        const ownerId = taskOwnerByFunction[range.name];
+        if (!ownerId) continue;
+        const isMine = ownerId === currentUserId;
+        const profile = participantProfiles[ownerId] || { name: ownerId, photo: null };
+        const markStyle = isMine
+          ? 'background-color: rgba(59,130,246,0.10); border-left: 3px solid rgba(59,130,246,0.70);'
+          : 'background-color: rgba(148,163,184,0.12); border-left: 3px solid rgba(100,116,139,0.55);';
+        next.push(
+          Decoration.mark({ attributes: { style: markStyle } }).range(range.from, range.to),
+          Decoration.widget({
+            widget: new FunctionOwnerWidget(profile.name || ownerId, profile.photo || null, isMine),
+            side: -1,
+          }).range(range.from),
+        );
+      }
+      return Decoration.set(next, true);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+}
+
+function createFocusCodeExtension(focusCode: string) {
+  return StateField.define({
+    create(state) {
+      if (!focusCode) return Decoration.none;
+      const doc = state.doc.toString();
+      const idx = doc.indexOf(focusCode);
+      if (idx < 0) return Decoration.none;
+      return Decoration.set([
+        Decoration.mark({
+          attributes: {
+            style: 'background-color: rgba(250, 204, 21, 0.18); outline: 1px solid rgba(202,138,4,0.55); border-radius: 2px;',
+          },
+        }).range(idx, idx + focusCode.length),
+      ]);
+    },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      if (!focusCode) return Decoration.none;
+      const doc = tr.state.doc.toString();
+      const idx = doc.indexOf(focusCode);
+      if (idx < 0) return Decoration.none;
+      return Decoration.set([
+        Decoration.mark({
+          attributes: {
+            style: 'background-color: rgba(250, 204, 21, 0.18); outline: 1px solid rgba(202,138,4,0.55); border-radius: 2px;',
+          },
+        }).range(idx, idx + focusCode.length),
+      ]);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+}
+
+function createSelectedFunctionExtension(functionName: string) {
+  return StateField.define({
+    create(state) {
+      if (!functionName) return Decoration.none;
+      const doc = state.doc.toString();
+      const target = getFunctionRanges(doc).find((r) => r.name === functionName);
+      if (!target) return Decoration.none;
+      return Decoration.set([
+        Decoration.mark({
+          attributes: {
+            style: 'outline: 1px solid rgba(16,185,129,0.65); background-color: rgba(16,185,129,0.08);',
+          },
+        }).range(target.from, target.to),
+      ]);
+    },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      if (!functionName) return Decoration.none;
+      const doc = tr.state.doc.toString();
+      const target = getFunctionRanges(doc).find((r) => r.name === functionName);
+      if (!target) return Decoration.none;
+      return Decoration.set([
+        Decoration.mark({
+          attributes: {
+            style: 'outline: 1px solid rgba(16,185,129,0.65); background-color: rgba(16,185,129,0.08);',
+          },
+        }).range(target.from, target.to),
+      ]);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+}
+
 export default function Editor() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [personalCode, setPersonalCode] = useState("");
@@ -413,14 +548,7 @@ export default function Editor() {
   const [helpSessionHelper, setHelpSessionHelper] = useState('');
   const [helpSessionTimeLeft, setHelpSessionTimeLeft] = useState(0);
 
-  // Helper-side state (when someone else requests help — inline widget)
-  const [incomingHelpRequest, setIncomingHelpRequest] = useState<{
-    helpeeId: string;
-    helpeeName: string;
-    helpeePhoto: string | null;
-  } | null>(null);
-  const [helpCardVisible, setHelpCardVisible] = useState(false);
-  const helpCardDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Helper-side queue state (visual tab highlighting, no pop-up interruption)
   const [pendingHelpRequests, setPendingHelpRequests] = useState<Array<{
     helpeeId: string;
     helpeeName: string;
@@ -430,26 +558,53 @@ export default function Editor() {
   // Other participants' personal editor code
   const [otherEditors, setOtherEditors] = useState<Record<string, string>>({});
 
-  // Inline help extension for the personal editor (driven by backend helperSuggestion events)
+  // Inline copilot-style hint (visual-only ghost comment)
   const [inlineHelpExtension, setInlineHelpExtension] = useState<Extension[]>([]);
-
-  // State for the inline help popup card (triggered by clicking the inline widget)
-  const [inlineHelpCardOpen, setInlineHelpCardOpen] = useState(false);
-  const [inlineHelpRequested, setInlineHelpRequested] = useState(false);
-
-  // Current suggestion from backend (used to populate the popup card)
-  const [currentSuggestion, setCurrentSuggestion] = useState<{
-    helperId: string; helperName: string; helperPhoto: string | null; concepts: string[];
+  const [copilotSuggestion, setCopilotSuggestion] = useState<{
+    helperId: string;
+    helperName: string;
+    helperPhoto: string | null;
+    concept: string;
+    anchorKeyword: string;
+    functionName: string;
   } | null>(null);
-  const [currentAnchorKeyword, setCurrentAnchorKeyword] = useState<string | null>(null);
+  const [assistWidget, setAssistWidget] = useState<{
+    status: 'requested' | 'accepted';
+    helperId: string;
+    helperName: string;
+    helperPhoto: string | null;
+    concept: string;
+  } | null>(null);
+  const [helpeeFixHint, setHelpeeFixHint] = useState<{
+    helperId: string;
+    helperName: string;
+    helperPhoto: string | null;
+    concept: string;
+    focusCode: string;
+    focusExplanation: string;
+  } | null>(null);
 
-  // Proactive helper suggestions (inline widgets in helpee's editor)
+  // Helper session generation state
+  const [activeHelpAsHelper, setActiveHelpAsHelper] = useState<{
+    helpeeId: string;
+    helpeeName: string;
+    helpeePhoto: string | null;
+  } | null>(null);
+  const [helperGuidanceLoading, setHelperGuidanceLoading] = useState(false);
+  const [helperGuidance, setHelperGuidance] = useState<{
+    correctedCode: string;
+    focusExplanation: string;
+    helperMessage: string;
+    changedLines: string[];
+    concept: string;
+  } | null>(null);
+
+  // Proactive helper suggestions (for app-shell helper list)
   const [helperSuggestions, setHelperSuggestions] = useState<Array<{
     helperId: string; helperName: string; helperPhoto: string | null; concepts: string[];
   }>>([]);
-  const [selectedHelper, setSelectedHelper] = useState<{
-    helperId: string; helperName: string; helperPhoto: string | null; concepts: string[];
-  } | null>(null);
+  const [teamParticipantStates, setTeamParticipantStates] = useState<Record<string, { status: string; currentTasks: string[]; name: string; photo?: string | null }>>({});
+  const [selectedTeamFunction, setSelectedTeamFunction] = useState<string>('');
 
   // Task detail drawer state (LeetCode-style)
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
@@ -474,13 +629,6 @@ export default function Editor() {
     }
   }, []);
 
-  // Listen for user dismissing the inline help widget (X button)
-  useEffect(() => {
-    const handler = () => setInlineHelpExtension([]);
-    document.addEventListener("inline-help-dismiss", handler);
-    return () => document.removeEventListener("inline-help-dismiss", handler);
-  }, []);
-
   // When the header "<helpee> needs help" pill is clicked, switch the left
   // tab to that helpee so the helper sees their live personal editor.
   useEffect(() => {
@@ -495,37 +643,20 @@ export default function Editor() {
     return () => window.removeEventListener('canary-focus-helpee', handler);
   }, [storedUserId]);
 
-  // Listen for clicks on the inline help widget button
-  useEffect(() => {
-    const handler = () => {
-      if (!inlineHelpRequested) {
-        setInlineHelpCardOpen(true);
-      }
-    };
-    document.addEventListener("inline-help-click", handler);
-    return () => document.removeEventListener("inline-help-click", handler);
-  }, [inlineHelpRequested]);
-
-  // Handle "Help Me When Free" from the inline help card
-  const inlineDismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleInlineHelpRequest = () => {
-    setInlineHelpCardOpen(false);
-    setInlineHelpRequested(true);
-    // Swap the inline widget to orange "will ping when free" mode
-    const helperName = currentSuggestion?.helperName || 'Helper';
-    const anchor = currentAnchorKeyword || 'pass';
-    setInlineHelpExtension([
-      createInlineHelpField(`${helperName} will ping when free`, anchor, "pending"),
-    ]);
-    // Auto-dismiss after 5 seconds
-    if (inlineDismissTimer.current) clearTimeout(inlineDismissTimer.current);
-    inlineDismissTimer.current = setTimeout(() => {
-      setInlineHelpExtension([]);
-      setInlineHelpRequested(false);
-    }, 5000);
-    // Send help request via WebSocket (existing mechanism)
+  const requestPeerAssist = useCallback((source: 'copilot-tab' | 'button') => {
     const ws = wsRef.current;
     const helpeeProfile = participantProfilesRef.current[storedUserId];
+    const personalView = personalEditorViewRef.current;
+    const activeFunction = personalView
+      ? getFunctionAtPosition(personalCode, personalView.state.selection.main.head)
+      : null;
+    const helperConcept = copilotSuggestion?.concept || 'this task';
+    const helperId = copilotSuggestion?.helperId || '';
+    const helperName = copilotSuggestion?.helperName || 'a helper';
+    const helperPhoto = copilotSuggestion?.helperPhoto || null;
+    const anchorKeyword = copilotSuggestion?.anchorKeyword || 'pass';
+    const functionName = copilotSuggestion?.functionName || activeFunction?.name || '';
+
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         event: 'helpRequest',
@@ -533,10 +664,27 @@ export default function Editor() {
           helpeeId: storedUserId,
           helpeeName: helpeeProfile?.name || storedUserId,
           helpeePhoto: helpeeProfile?.photo || null,
+          helperId,
+          concept: helperConcept,
+          anchorKeyword,
+          functionName,
+          message: source === 'copilot-tab'
+            ? `Requested from copilot ghost hint for ${helperConcept}.`
+            : 'Manual help request from toolbar.',
         }
       }));
     }
-  };
+    setAssistWidget({
+      status: 'requested',
+      helperId,
+      helperName,
+      helperPhoto,
+      concept: helperConcept,
+    });
+    setCopilotSuggestion(null);
+    setHelpeeFixHint(null);
+    setInlineHelpExtension([]);
+  }, [copilotSuggestion, personalCode, storedUserId]);
 
   const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python(), ...pythonIndent]);
   const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
@@ -559,6 +707,16 @@ export default function Editor() {
   const leftEditorViewRefs = useRef<Record<string, EditorView | null>>({});
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId && participantProfiles[p]);
+  const pendingHelpIds = useMemo(() => new Set(pendingHelpRequests.map((r) => r.helpeeId)), [pendingHelpRequests]);
+  const taskOwnerByFunction = useMemo(() => {
+    const map: Record<string, string> = {};
+    Object.entries(teamParticipantStates).forEach(([pid, state]) => {
+      (state.currentTasks || []).forEach((fn) => {
+        map[fn] = pid;
+      });
+    });
+    return map;
+  }, [teamParticipantStates]);
 
   useEffect(() => {
     const localProfiles = ALL_PARTICIPANTS.reduce<Record<string, ParticipantProfile>>((acc, participantId) => {
@@ -601,6 +759,17 @@ export default function Editor() {
       });
   }, []);
 
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/debug/states`)
+      .then((response) => response.json())
+      .then((data) => {
+        setTeamParticipantStates(data?.participantStates || {});
+      })
+      .catch(() => {
+        // backend may be temporarily unavailable
+      });
+  }, []);
+
   const getParticipantProfile = useCallback((participantId: string) => {
     return participantProfiles[participantId] || { name: participantId, photo: null };
   }, [participantProfiles]);
@@ -608,6 +777,29 @@ export default function Editor() {
   const remoteCursorExtension = useMemo(
     () => createRemoteCursorExtension(remoteTeamCursors),
     [remoteTeamCursors]
+  );
+  const teamOwnershipExtension = useMemo(
+    () => [createTeamOwnershipExtension(taskOwnerByFunction, participantProfiles, storedUserId)],
+    [taskOwnerByFunction, participantProfiles, storedUserId]
+  );
+  const selectedTeamFunctionExtension = useMemo(
+    () => selectedTeamFunction ? [createSelectedFunctionExtension(selectedTeamFunction)] : [],
+    [selectedTeamFunction]
+  );
+  const helpeeFocusExtension = useMemo(
+    () => helpeeFixHint?.focusCode ? [createFocusCodeExtension(helpeeFixHint.focusCode)] : [],
+    [helpeeFixHint]
+  );
+  const copilotTabExtension = useMemo(
+    () => Prec.high(keymap.of([{
+      key: 'Tab',
+      run: () => {
+        if (!copilotSuggestion || assistWidget || helpSessionActive) return false;
+        requestPeerAssist('copilot-tab');
+        return true;
+      },
+    }])),
+    [copilotSuggestion, assistWidget, helpSessionActive, requestPeerAssist]
   );
 
   const handlePersonalEditorChange = useCallback((value: string) => {
@@ -646,12 +838,14 @@ export default function Editor() {
   const personalEditorResolvedExtensions = useMemo(
     () => [
       ...personalEditorExtensions,
+      copilotTabExtension,
       runIconField,
       personalRunIconGutter,
       runIconGutterTheme,
       ...inlineHelpExtension,
+      ...helpeeFocusExtension,
     ],
-    [personalEditorExtensions, personalRunIconGutter, inlineHelpExtension]
+    [personalEditorExtensions, copilotTabExtension, personalRunIconGutter, inlineHelpExtension, helpeeFocusExtension]
   );
 
   // Help session countdown timer (helpee side)
@@ -785,19 +979,28 @@ export default function Editor() {
           setRemoteTeamCursors(nextRemoteCursors);
         }
         if (data['event'] === 'StartHelpSession') {
-          const { helper, helpee, time, hint } = data['payload'];
+          const { helper, helpee, time, hint, concept } = data['payload'];
           if (helper === storedUserId || helpee === storedUserId) {
             const totalDurationSeconds = time;
-            const taskContext = hint + " please go over to their screen and help them. ";
+            const taskContext = (hint || `Please help with ${concept || 'this concept'}`) + " please go over to their screen and help them. ";
             const helperName = helper;
             setSessionDetails({ totalDurationSeconds, taskContext, helperName });
             setIsSessionStartedModalOpen(true);
 
-            // Helpee side: track active help session
             if (helpee === storedUserId) {
               setHelpSessionActive(true);
               setHelpSessionHelper(helper);
               setHelpSessionTimeLeft(totalDurationSeconds);
+            }
+
+            if (helper === storedUserId) {
+              const helpeeProfile = participantProfilesRef.current[helpee] || { name: helpee, photo: null };
+              setActiveHelpAsHelper({
+                helpeeId: helpee,
+                helpeeName: helpeeProfile.name || helpee,
+                helpeePhoto: helpeeProfile.photo || null,
+              });
+              setHelperGuidance(null);
             }
           }
         }
@@ -831,6 +1034,9 @@ export default function Editor() {
             });
           }
         }
+        if (data['event'] === 'updateGraph') {
+          setTeamParticipantStates(data?.payload?.participantStates || {});
+        }
         if (data['event'] === 'helpRequest') {
           const { helpeeId, helpeeName, helpeePhoto } = data['payload'];
           // Ensure the helpee has a profile entry so their editor tab renders;
@@ -854,15 +1060,11 @@ export default function Editor() {
             window.dispatchEvent(new CustomEvent('canary-help-needed-updated', { detail: { requests: next } }));
             return next;
           });
-          // Floating popup card is only for helpers, not the helpee themselves.
-          if (helpeeId !== storedUserId) {
-            setIncomingHelpRequest({ helpeeId, helpeeName, helpeePhoto });
-            setHelpCardVisible(true);
-            // Auto-dismiss the floating card after 4s so it doesn't block the editor.
-            if (helpCardDismissTimerRef.current) clearTimeout(helpCardDismissTimerRef.current);
-            helpCardDismissTimerRef.current = setTimeout(() => {
-              setHelpCardVisible(false);
-            }, 4000);
+        }
+        if (data['event'] === 'helpRequestDismissed') {
+          const { helpeeId } = data['payload'] || {};
+          if (helpeeId) {
+            setPendingHelpRequests((prev) => prev.filter((p) => p.helpeeId !== helpeeId));
           }
         }
         if (data['event'] === 'StartHelpSession') {
@@ -876,9 +1078,69 @@ export default function Editor() {
             });
           }
         }
+        if (data['event'] === 'helpAccepted') {
+          const { helperId, helpeeId, concept } = data['payload'] || {};
+          if (helpeeId === storedUserId) {
+            const helperProfile = participantProfilesRef.current[helperId] || { name: helperId, photo: null };
+            setAssistWidget({
+              status: 'accepted',
+              helperId,
+              helperName: helperProfile.name || helperId,
+              helperPhoto: helperProfile.photo || null,
+              concept: concept || copilotSuggestion?.concept || 'this task',
+            });
+          }
+        }
+        if (data['event'] === 'helpGuidanceGenerating') {
+          const { helperId } = data['payload'] || {};
+          if (helperId === storedUserId) {
+            setHelperGuidanceLoading(true);
+          }
+        }
+        if (data['event'] === 'helpGuidanceReady') {
+          const payload = data['payload'] || {};
+          if (payload.helperId === storedUserId) {
+            setHelperGuidanceLoading(false);
+            setHelperGuidance({
+              correctedCode: payload.correctedCode || '',
+              focusExplanation: payload.focusExplanation || '',
+              helperMessage: payload.helperMessage || '',
+              changedLines: payload.changedLines || [],
+              concept: payload.concept || '',
+            });
+            if (typeof payload.correctedCode === 'string' && payload.correctedCode.trim()) {
+              setPersonalCode((prev) => {
+                const marker = "# --- Peer Assist Draft";
+                const nextDraft = `${marker} for ${payload.helpeeId}\n${payload.correctedCode}\n# --- End Peer Assist Draft ---\n\n`;
+                if (prev.includes(marker)) {
+                  return prev.replace(/# --- Peer Assist Draft[\s\S]*?# --- End Peer Assist Draft ---\n\n/, nextDraft);
+                }
+                return `${nextDraft}${prev}`;
+              });
+            }
+          }
+          if (payload.helpeeId === storedUserId) {
+            const helperProfile = participantProfilesRef.current[payload.helperId] || { name: payload.helperId, photo: null };
+            setAssistWidget(null);
+            setHelpeeFixHint({
+              helperId: payload.helperId,
+              helperName: helperProfile.name || payload.helperId,
+              helperPhoto: helperProfile.photo || null,
+              concept: payload.concept || '',
+              focusCode: payload.focusCode || '',
+              focusExplanation: payload.focusExplanation || '',
+            });
+          }
+        }
+        if (data['event'] === 'helpDraftShared') {
+          const { helpeeId } = data['payload'] || {};
+          if (helpeeId === storedUserId) {
+            setHelpeeFixHint(null);
+          }
+        }
         if (data['event'] === 'helperSuggestion') {
           const { suggestion, detectedConcepts, anchorKeyword } = data['payload'];
-          if (suggestion && !inlineHelpRequested) {
+          if (suggestion) {
             const conceptLabel = detectedConcepts[0] || 'this';
             const key = `${suggestion.helperId || suggestion.helperName}::${conceptLabel}`;
 
@@ -905,18 +1167,21 @@ export default function Editor() {
             // Only show the inline editor badge ONCE per unique helper+concept.
             if (lastSuggestionKeyRef.current !== key) {
               lastSuggestionKeyRef.current = key;
-              setCurrentSuggestion(suggestion);
-              setCurrentAnchorKeyword(anchorKeyword || detectedConcepts[0] || 'pass');
-              const anchor = anchorKeyword || 'pass';
+              const anchor = anchorKeyword || detectedConcepts[0] || 'pass';
+              setCopilotSuggestion({
+                helperId: suggestion.helperId,
+                helperName: suggestion.helperName,
+                helperPhoto: suggestion.helperPhoto || null,
+                concept: conceptLabel,
+                anchorKeyword: anchor,
+                functionName: '',
+              });
               setInlineHelpExtension([
                 createInlineHelpField(
-                  `${suggestion.helperName} can help with ${conceptLabel}`,
-                  anchor,
-                  "suggestion"
+                  `${suggestion.helperName} can help with ${conceptLabel}. Press Tab to request peer assist.`,
+                  anchor
                 ),
               ]);
-              // Auto-dismiss inline help badge after 3 seconds
-              setTimeout(() => setInlineHelpExtension([]), 3000);
             }
           }
         }
@@ -986,12 +1251,6 @@ export default function Editor() {
     setHistory((prev) => [...prev, [new Date(), output, all]]);
   }
 
-  const dismissHelpCard = () => {
-    setHelpCardVisible(false);
-    setIncomingHelpRequest(null);
-    setInlineHelpExtension([]);
-  };
-
   const copyLeftToPersonal = () => {
     if (!activeTab) return;
 
@@ -1003,6 +1262,13 @@ export default function Editor() {
     if (!sourceFunction) {
       console.warn('No active function found to copy from the left editor.');
       return;
+    }
+    if (activeTab === 'team') {
+      const owner = taskOwnerByFunction[sourceFunction.name];
+      if (owner && owner !== storedUserId) {
+        console.warn(`Function '${sourceFunction.name}' is currently owned by ${owner}; selection is disabled.`);
+        return;
+      }
     }
 
     setPersonalCode((prev) => {
@@ -1025,11 +1291,33 @@ export default function Editor() {
       console.warn('Unable to find both source and target functions for copy-to-team.');
       return;
     }
+    const targetOwner = taskOwnerByFunction[targetFunction.name];
+    if (targetOwner && targetOwner !== storedUserId) {
+      console.warn(`Cannot overwrite '${targetFunction.name}' because ${targetOwner} is currently working on it.`);
+      return;
+    }
 
     ytext.delete(targetFunction.from, targetFunction.to - targetFunction.from);
     ytext.insert(targetFunction.from, `${sourceFunction.text}\n\n`);
     syncTeamEditorToBackend(ytext.toString());
   };
+
+  const shareDraftWithHelpee = useCallback(async () => {
+    if (!activeHelpAsHelper) return;
+    try {
+      await fetch(`${BACKEND_URL}/help/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          helperId: storedUserId,
+          helpeeId: activeHelpAsHelper.helpeeId,
+          code: personalCode,
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to share draft with helpee:', error);
+    }
+  }, [activeHelpAsHelper, personalCode, storedUserId]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -1067,7 +1355,17 @@ export default function Editor() {
                       )}
                     </Tabs.Tab>
                     {otherParticipants.map(p => (
-                      <Tabs.Tab key={p} value={p}>
+                      <Tabs.Tab
+                        key={p}
+                        value={p}
+                        title={pendingHelpIds.has(p) ? `${getParticipantProfile(p).name} requested help` : undefined}
+                        style={pendingHelpIds.has(p) ? {
+                          background: '#fef2f2',
+                          borderColor: '#fca5a5',
+                          color: '#b91c1c',
+                          borderRadius: 8,
+                        } : undefined}
+                      >
                         <ParticipantLabel
                           id={p}
                           name={getParticipantProfile(p).name}
@@ -1085,6 +1383,7 @@ export default function Editor() {
                   <Tabs.Panel value="team" style={{ flexGrow: 1, display: activeTab === 'team' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
                     <Group justify="space-between" p="xs" style={{ borderBottom: '1px solid #ccc', flexShrink: 0 }}>
                       <Group gap="xs" align="center">
+                        <Badge size="xs" variant="light" color="gray">Read-only</Badge>
                         {Object.entries(typingUsers).filter(([, ed]) => ed === 'team').map(([uid]) => (
                           <span key={uid} className={styles.typingIndicator}>
                             <ParticipantLabel
@@ -1102,9 +1401,12 @@ export default function Editor() {
                     <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
                       <CodeMirror
                         height="100%"
+                        editable={false}
                         onCreateEditor={(view) => {
                           teamEditorViewRef.current = view;
                           leftEditorViewRefs.current.team = view;
+                          const activeFn = getFunctionAtPosition(view.state.doc.toString(), view.state.selection.main.head);
+                          setSelectedTeamFunction(activeFn?.name || '');
                         }}
                         extensions={[
                           python(),
@@ -1113,12 +1415,21 @@ export default function Editor() {
                           runIconField,
                           sharedRunIconGutter,
                           runIconGutterTheme,
+                          ...teamOwnershipExtension,
+                          ...selectedTeamFunctionExtension,
                           ...remoteCursorExtension,
                           ViewPlugin.fromClass(class {
                             update(u: ViewUpdate) {
                               if (suppressTeamSyncRef.current) return;
                               if (!u.docChanged && !u.selectionSet && !u.focusChanged) return;
                               if (u.docChanged) sendTypingEvent('team');
+                              if (u.selectionSet || u.focusChanged || u.docChanged) {
+                                const activeFn = getFunctionAtPosition(
+                                  u.state.doc.toString(),
+                                  u.state.selection.main.head,
+                                );
+                                setSelectedTeamFunction(activeFn?.name || '');
+                              }
                               const ws = wsRef.current;
                               if (ws && ws.readyState === WebSocket.OPEN) {
                                 const selection = u.view.hasFocus && u.view.dom.ownerDocument.hasFocus()
@@ -1160,6 +1471,11 @@ export default function Editor() {
                               textSize={18}
                             />
                           </Title>
+                          {pendingHelpIds.has(p) && (
+                            <Badge color="red" variant="light" size="xs" title="This peer requested help">
+                              Needs help
+                            </Badge>
+                          )}
                           {typingUsers[p] && (
                             <span className={styles.typingIndicator}>
                               <ParticipantLabel
@@ -1224,11 +1540,22 @@ export default function Editor() {
                     &rarr;
                   </button>
                   <button
-                    title="Copy My Editor to Team Editor"
-                    onClick={(e) => { e.stopPropagation(); copyPersonalToTeam(); }}
+                    title={
+                      activeHelpAsHelper && activeTab === activeHelpAsHelper.helpeeId
+                        ? `Share draft with ${activeHelpAsHelper.helpeeName}`
+                        : "Copy My Editor to Team Editor"
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (activeHelpAsHelper && activeTab === activeHelpAsHelper.helpeeId) {
+                        void shareDraftWithHelpee();
+                        return;
+                      }
+                      copyPersonalToTeam();
+                    }}
                     className={styles.copyArrowBtn}
-                    disabled={activeTab !== 'team'}
-                    style={activeTab !== 'team' ? { opacity: 0.3, cursor: 'not-allowed' } : {}}
+                    disabled={activeTab !== 'team' && !(activeHelpAsHelper && activeTab === activeHelpAsHelper.helpeeId)}
+                    style={activeTab !== 'team' && !(activeHelpAsHelper && activeTab === activeHelpAsHelper.helpeeId) ? { opacity: 0.3, cursor: 'not-allowed' } : {}}
                   >
                     &larr;
                   </button>
@@ -1267,29 +1594,31 @@ export default function Editor() {
                           {helpSessionHelper} is helping you
                         </Badge>
                       )}
+                      {helperGuidanceLoading && (
+                        <Badge color="blue" variant="light" size="sm">
+                          Generating peer-assist draft...
+                        </Badge>
+                      )}
                     </Group>
                     <Group gap="xs">
                       <Button
-                        onClick={() => {
-                          const ws = wsRef.current;
-                          const helpeeProfile = participantProfilesRef.current[storedUserId];
-                          if (ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({
-                              event: 'helpRequest',
-                              payload: {
-                                helpeeId: storedUserId,
-                                helpeeName: helpeeProfile?.name || storedUserId,
-                                helpeePhoto: helpeeProfile?.photo || null,
-                              },
-                            }));
-                          }
-                        }}
+                        onClick={() => requestPeerAssist('button')}
                         size='compact-xs'
                         color='red'
                         variant='light'
                       >
                         Request Help
                       </Button>
+                      {activeHelpAsHelper && (
+                        <Button
+                          onClick={() => { void shareDraftWithHelpee(); }}
+                          size='compact-xs'
+                          color='teal'
+                          variant='light'
+                        >
+                          Share with {activeHelpAsHelper.helpeeName}
+                        </Button>
+                      )}
                       <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
                       {/* <Button onClick={runPersonalCode} size='compact-xs'>Run</Button> */}
                       <Button onClick={clearCode} size='compact-xs'>Clear Console</Button>
@@ -1315,151 +1644,53 @@ export default function Editor() {
                       } : undefined}
                       style={{ height: '100%' }}
                     />
-                    {/* Floating helper card — shown when someone requests help (incoming) */}
-                    {helpCardVisible && incomingHelpRequest && (
-                      <div className={styles.helperCard}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <div>
-                            <ParticipantLabel
-                              id={incomingHelpRequest.helpeeId}
-                              name={incomingHelpRequest.helpeeName || incomingHelpRequest.helpeeId}
-                              photo={incomingHelpRequest.helpeePhoto || null}
-                              avatarSize={36}
-                              textSize={13}
-                            />
-                            <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 600 }}>
-                              Needs Help
-                            </div>
-                          </div>
+                    {assistWidget && (
+                      <div className={styles.helperCard} style={{
+                        border: assistWidget.status === 'accepted' ? '1px solid #22c55e' : '1px solid #f59e0b',
+                        background: assistWidget.status === 'accepted' ? '#f0fdf4' : '#fffbeb',
+                      }}>
+                        <ParticipantLabel
+                          id={assistWidget.helperId}
+                          name={assistWidget.helperName}
+                          photo={assistWidget.helperPhoto}
+                          avatarSize={28}
+                          textSize={13}
+                        />
+                        <div style={{ fontSize: 12, marginTop: 6, color: assistWidget.status === 'accepted' ? '#166534' : '#92400e', fontWeight: 600 }}>
+                          {assistWidget.status === 'accepted'
+                            ? `${assistWidget.helperName} accepted (${assistWidget.concept}).`
+                            : `Waiting for ${assistWidget.helperName} (${assistWidget.concept}).`}
                         </div>
-                        <Button
-                          size="compact-xs"
-                          color="orange"
-                          mt={8}
-                          fullWidth
-                          onClick={() => {
-                            dismissHelpCard();
-                            setActiveTab(incomingHelpRequest.helpeeId);
-                          }}
-                        >
-                          Help Me When Free
-                        </Button>
-                        <Button
-                          size="compact-xs"
-                          variant="default"
-                          mt={4}
-                          fullWidth
-                          onClick={dismissHelpCard}
-                        >
-                          Close
-                        </Button>
                       </div>
                     )}
-                    {/* Floating helper card — proactive suggestion (helpee side: who can help me) */}
-                    {!helpCardVisible && selectedHelper && (
-                      <div className={styles.helperCard}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          {selectedHelper.helperPhoto ? (
-                            <img
-                              src={selectedHelper.helperPhoto}
-                              alt={selectedHelper.helperName}
-                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', border: '3px solid #22c55e' }}
-                            />
-                          ) : (
-                            <div style={{
-                              width: 36, height: 36, borderRadius: '50%', background: '#334155',
-                              color: 'white', fontWeight: 700, display: 'flex', alignItems: 'center',
-                              justifyContent: 'center', fontSize: 16, border: '3px solid #22c55e'
-                            }}>
-                              {selectedHelper.helperName.charAt(0)}
-                            </div>
-                          )}
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 700 }}>
-                              {selectedHelper.helperName}
-                            </div>
-                            <div style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>
-                              Can help with {selectedHelper.concepts[0]}
-                            </div>
-                          </div>
+                    {helpeeFixHint && (
+                      <div className={styles.helperCard} style={{ top: 92, border: '1px solid #22c55e', background: '#f0fdf4', minWidth: 260 }}>
+                        <div style={{ fontSize: 12, color: '#166534', fontWeight: 700, marginBottom: 4 }}>
+                          Talk to {helpeeFixHint.helperName}
                         </div>
-                        <Button
-                          size="compact-xs"
-                          color="orange"
-                          mt={8}
-                          fullWidth
-                          onClick={() => {
-                            setSelectedHelper(null);
-                          }}
-                        >
-                          Dismiss
-                        </Button>
-                        <Button
-                          size="compact-xs"
-                          variant="default"
-                          mt={4}
-                          fullWidth
-                          onClick={() => setSelectedHelper(null)}
-                        >
-                          Close
-                        </Button>
+                        <div style={{ fontSize: 11, color: '#166534' }}>
+                          {helpeeFixHint.focusExplanation || `Review the highlighted ${helpeeFixHint.concept} lines.`}
+                        </div>
                       </div>
                     )}
-                    {/* Inline help popup card (triggered by clicking inline helper button) */}
-                    {inlineHelpCardOpen && currentSuggestion && (
-                      <div className={styles.helperCard} style={{ minWidth: 220 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                          <div>
-                            <ParticipantLabel
-                              id={currentSuggestion.helperId}
-                              name={currentSuggestion.helperName}
-                              photo={currentSuggestion.helperPhoto || null}
-                              avatarSize={36}
-                              textSize={15}
-                            />
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
-                              <span style={{
-                                display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                                background: '#ef4444',
-                              }} />
-                              <span style={{ fontSize: 13, color: '#ef4444', fontWeight: 600 }}>Deep Work</span>
-                            </div>
-                          </div>
+                    {helperGuidance && activeHelpAsHelper && (
+                      <div style={{
+                        position: 'absolute',
+                        top: 8,
+                        left: 8,
+                        right: 8,
+                        background: '#eff6ff',
+                        border: '1px solid #bfdbfe',
+                        borderRadius: 8,
+                        padding: '8px 10px',
+                        zIndex: 12,
+                      }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8' }}>
+                          Peer-assist draft for {activeHelpAsHelper.helpeeName} ({helperGuidance.concept || 'focused fix'})
                         </div>
-                        <Button
-                          size="compact-sm"
-                          color="orange"
-                          mt={10}
-                          fullWidth
-                          onClick={handleInlineHelpRequest}
-                          style={{ fontWeight: 600 }}
-                        >
-                          Help Me When Free
-                        </Button>
-                        <Button
-                          size="compact-sm"
-                          variant="default"
-                          mt={6}
-                          fullWidth
-                          onClick={() => setInlineHelpCardOpen(false)}
-                          style={{ fontWeight: 500 }}
-                        >
-                          Close
-                        </Button>
-                      </div>
-                    )}
-                    {/* Inline suggestion chips (helpee side: clickable badges below editor toolbar) */}
-                    {helperSuggestions.length > 0 && !selectedHelper && !helpCardVisible && (
-                      <div className={styles.suggestionChips}>
-                        {helperSuggestions.map(s => (
-                          <button
-                            key={s.helperId}
-                            className={styles.suggestionChip}
-                            onClick={() => setSelectedHelper(s)}
-                          >
-                            {s.helperName} can help with {s.concepts[0]}
-                          </button>
-                        ))}
+                        <div style={{ fontSize: 11, color: '#1e3a8a', marginTop: 3 }}>
+                          {helperGuidance.focusExplanation || helperGuidance.helperMessage}
+                        </div>
                       </div>
                     )}
                   </div>
