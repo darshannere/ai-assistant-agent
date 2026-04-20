@@ -1544,22 +1544,6 @@ async def save_profile(profile: ParticipantProfile):
         },
     }))
 
-    # Demo: When participant B registers, auto-mark calculate_order_cost as completed by B
-    pid = profile.id.replace('"', '')
-    if pid == "B":
-        node = graph_manager.graph.get("calculate_order_cost")
-        if node and node.work_status != 2:
-            node.claimed_by = pid
-            node.work_status = 2
-            node.completed = node.total or 1
-            node.total = node.total or 1
-            # Seed B's accumulated concepts so helper suggestions work
-            concepts = [c.strip() for c in node.concepts.split(",") if c.strip()]
-            existing = editor_manager.participant_concepts.get(pid, [])
-            editor_manager.participant_concepts[pid] = list(
-                dict.fromkeys(existing + concepts)
-            )
-
     work_statuses = [
         {node_name: graph_manager.graph[node_name].work_status}
         for node_name in graph_manager.graph

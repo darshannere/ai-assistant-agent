@@ -56,14 +56,44 @@ check("All profiles saved", profiles["status"] == "success" and len(profiles["pr
       f"got {len(profiles.get('profiles', {}))} profiles")
 
 
-# ── STEP 2: Verify B has seeded concepts (auto-marked on register) ──
+# ── STEP 2: B completes calculate_order_cost via real flow ──
 
-step(2, "Verify B's auto-seeded concepts")
+step(2, "B claims and completes calculate_order_cost")
+
+async def complete_b_task_real_flow():
+    async with websockets.connect(f"{WS_BASE}/ws/B") as ws:
+        try:
+            for _ in range(5):
+                await asyncio.wait_for(ws.recv(), timeout=1)
+        except asyncio.TimeoutError:
+            pass
+
+        # Claim the task first.
+        await ws.send(json.dumps({
+            "event": "updateNode",
+            "payload": {"node": "calculate_order_cost", "id": "B"},
+        }))
+        await asyncio.sleep(0.2)
+
+    # Submit implementation and run targeted tests as B.
+    code = """
+def calculate_order_cost(order, menu):
+    cost = 0
+    for item in order.items:
+        cost += menu.dishes[item]
+    return cost
+"""
+    r = requests.post(f"{BASE}/testFunction", json={"code": code, "channel": "B"})
+    check("B testFunction call succeeded", r.status_code == 200, f"status={r.status_code}")
+
+asyncio.get_event_loop().run_until_complete(complete_b_task_real_flow())
 
 r = requests.get(f"{BASE}/debug/states")
 data = r.json()
 b_concepts = data.get("accumulatedConcepts", {}).get("B", [])
-check("B has seeded concepts", len(b_concepts) > 0, f"B concepts: {b_concepts}")
+check("B has real accumulated concepts", len(b_concepts) > 0, f"B concepts: {b_concepts}")
+check("B concepts include Looping", "Looping" in b_concepts, f"B concepts: {b_concepts}")
+check("B concepts include Dictionary concepts", "Dictionary concepts" in b_concepts, f"B concepts: {b_concepts}")
 
 
 # ── STEP 3-4: WebSocket — A types code, gets helperSuggestion ──
