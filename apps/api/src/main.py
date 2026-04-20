@@ -13,9 +13,11 @@ import re
 import sys
 import io
 import ast
+import inspect
 import difflib
 from textwrap import dedent
 import csv
+from pathlib import Path
 from collections import ChainMap, defaultdict
 import json
 import study_problem_sol
@@ -153,6 +155,83 @@ def parse_top_level_functions(code: str) -> Dict[str, str]:
             if source:
                 function_map[node.name] = dedent(source).strip()
     return function_map
+
+
+def _get_solution_function_code(function_name: str) -> str:
+    if not function_name:
+        return ""
+
+    candidate_paths = [
+        Path(__file__).resolve().parent / "study_problem_sol.py",
+        Path.cwd() / "study_problem_sol.py",
+    ]
+    for path in candidate_paths:
+        try:
+            if not path.exists():
+                continue
+            solution_code = path.read_text()
+            function_map = parse_top_level_functions(solution_code)
+            if function_name in function_map:
+                return function_map[function_name].strip()
+        except OSError:
+            continue
+
+    try:
+        module_source = inspect.getsource(study_problem_sol)
+        function_map = parse_top_level_functions(module_source)
+        if function_name in function_map:
+            return function_map[function_name].strip()
+    except (OSError, TypeError):
+        pass
+
+    fallback_obj = getattr(study_problem_sol, function_name, None)
+    if fallback_obj is None:
+        return ""
+    try:
+        return dedent(inspect.getsource(fallback_obj)).strip()
+    except (OSError, TypeError):
+        return ""
+
+
+def _extract_function_for_share(function_name: str, code: str) -> Optional[tuple[str, str]]:
+    function_map = parse_top_level_functions(code)
+    if not function_map:
+        return None
+    if function_name and function_name in function_map:
+        return function_name, function_map[function_name]
+    first_name = next(iter(function_map))
+    return first_name, function_map[first_name]
+
+
+def _replace_top_level_function_in_code(original_code: str, function_name: str, replacement_code: str) -> Optional[str]:
+    try:
+        replacement_tree = ast.parse(dedent(replacement_code))
+        original_tree = ast.parse(original_code)
+    except SyntaxError:
+        return None
+
+    replacement_node = None
+    for node in replacement_tree.body:
+        if isinstance(node, ast.FunctionDef):
+            replacement_node = node
+            break
+    if replacement_node is None:
+        return None
+
+    replaced = False
+    new_body = []
+    for node in original_tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            new_body.append(replacement_node)
+            replaced = True
+        else:
+            new_body.append(node)
+
+    if not replaced:
+        return None
+
+    original_tree.body = new_body
+    return ast.unparse(original_tree)
 
 
 def expand_matched_block(lines: List[str], start_idx: int) -> tuple[int, int]:
@@ -417,6 +496,7 @@ class HelpShareBody(BaseModel):
     helperId: str
     helpeeId: str
     code: str
+    functionName: Optional[str] = None
 
 class EditorManager:
     def __init__(self):
@@ -1127,26 +1207,29 @@ async def start_help_session(body: HelpRequest):
         helpee_function_code=focus.get("function_code", helpee_code),
         pending_context=pending_context,
     )
+    target_function_name = focus.get("function_name", "") or current_task or ""
     helper_evidence = _select_helper_evidence(
         helper_id=helper_clean,
         concept=concept,
-        function_name=focus.get("function_name", ""),
+        function_name=target_function_name,
     )
+    solution_function_code = _get_solution_function_code(target_function_name)
     solution_reference = helper_evidence.get("solution_reference") or CONCEPT_REFERENCE_TEMPLATES.get(
-        focus.get("function_name", ""), {}
+        target_function_name, {}
     ).get(concept, {}).get("solution_snippet", "")
 
     session_key = _help_session_key(helper_clean, helpee_clean)
     editor_manager.active_help_context[session_key] = {
         "helperId": helper_clean,
         "helpeeId": helpee_clean,
-        "functionName": focus.get("function_name", ""),
+        "functionName": target_function_name,
         "concept": concept,
         "focusLineStart": focus.get("line_start", 1),
         "focusLineEnd": focus.get("line_end", 1),
         "focusCode": focus.get("focus_code", ""),
         "helpeeFunctionCode": focus.get("function_code", ""),
         "helperEvidenceCode": helper_evidence.get("code", ""),
+        "solutionFunctionCode": solution_function_code,
         "solutionReference": solution_reference,
         "hint": hint or pending_context.get("message", ""),
         "createdAt": int(_time.time()),
@@ -1160,7 +1243,7 @@ async def start_help_session(body: HelpRequest):
             "time": duration_seconds,
             "hint": hint,
             "concept": concept,
-            "function": focus.get("function_name", ""),
+            "function": target_function_name,
             "sessionKey": session_key,
         },
     }
@@ -1868,106 +1951,29 @@ def _extract_first_json_obj(text: str) -> Dict[str, Any]:
 
 
 def _ai_generate_help_guidance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
-    helper_id = payload["helper_id"]
-    helpee_id = payload["helpee_id"]
     concept = payload["concept"]
     function_name = payload["function_name"]
     helpee_function_code = payload["helpee_function_code"]
-    focus_code = payload["focus_code"]
     focus_line_start = payload["focus_line_start"]
     focus_line_end = payload["focus_line_end"]
-    helper_evidence = payload["helper_evidence"]
-    solution_reference = payload["solution_reference"]
-
-    prompt = dedent(
-        f"""
-        You are generating peer-assist guidance for Python code review.
-        Return ONLY JSON with this schema:
-        {{
-          "corrected_code": "<full corrected function code>",
-          "focus_explanation": "<1-2 sentence explanation of what to fix in the focus block only>",
-          "helper_message": "<short message helper can say to helpee>",
-          "changed_lines": ["<line or block summary>", "..."],
-          "changed_line_ranges": [{{"start": 3, "end": 5}}]
-        }}
-
-        Constraints:
-        - Keep changes minimal and fine-grained.
-        - Preserve all working parts; only change code needed for the target concept.
-        - Keep function signature unchanged.
-        - Do not rewrite unrelated code.
-
-        Context:
-        helper_id={helper_id}
-        helpee_id={helpee_id}
-        target_concept={concept}
-        target_function={function_name}
-        helpee_focus_lines={focus_line_start}-{focus_line_end}
-
-        Helpee function code:
-        ```python
-        {helpee_function_code}
-        ```
-
-        Helpee focus block:
-        ```python
-        {focus_code}
-        ```
-
-        Helper's previous implementation evidence:
-        ```python
-        {helper_evidence}
-        ```
-
-        Official solution reference snippet:
-        ```python
-        {solution_reference}
-        ```
-        """
+    solution_function_code = (
+        payload.get("solution_function_code")
+        or _get_solution_function_code(function_name)
+        or ""
     ).strip()
 
-    try:
-        response = editor_manager.client.chat.completions.create(
-            model="google/gemini-2.0-flash-001",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        content = (response.choices[0].message.content or "").strip()
-        parsed = _extract_first_json_obj(content)
-    except Exception as exc:
-        print(f"[help-guidance] generation failed: {exc}")
-        parsed = {}
+    corrected_code = solution_function_code
+    if not corrected_code:
+        return {
+            "corrected_code": "",
+            "focus_explanation": f"Reference solution for `{function_name}` was not found in study_problem_sol.py.",
+            "helper_message": "Reference solution unavailable for this function.",
+            "changed_lines": [],
+            "changed_line_ranges": [],
+        }
 
-    fallback_corrected = helpee_function_code
-    if solution_reference.strip() and focus_code.strip() and focus_code in helpee_function_code:
-        focus_lines = focus_code.splitlines()
-        leading_ws = re.match(r"^(\s*)", focus_lines[0]).group(1) if focus_lines else ""
-        normalized_solution = "\n".join(
-            (leading_ws + line if line.strip() else line)
-            for line in solution_reference.splitlines()
-        )
-        fallback_corrected = helpee_function_code.replace(focus_code, normalized_solution, 1)
-
-    corrected_code = (parsed.get("corrected_code") or "").strip() or fallback_corrected
-    changed_lines = parsed.get("changed_lines")
-    if not isinstance(changed_lines, list):
-        changed_lines = [f"Refine {concept} logic around lines {focus_line_start}-{focus_line_end}."]
-    changed_line_ranges = parsed.get("changed_line_ranges")
+    changed_lines = [f"Review {concept} around lines {focus_line_start}-{focus_line_end}."]
     normalized_ranges: List[Dict[str, int]] = []
-
-    if isinstance(changed_line_ranges, list):
-        for entry in changed_line_ranges:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                start = int(entry.get("start", 0))
-                end = int(entry.get("end", start))
-            except (TypeError, ValueError):
-                continue
-            if start <= 0:
-                continue
-            if end < start:
-                end = start
-            normalized_ranges.append({"start": start, "end": end})
 
     if not normalized_ranges:
         old_lines = helpee_function_code.splitlines()
@@ -1987,8 +1993,8 @@ def _ai_generate_help_guidance_sync(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "corrected_code": corrected_code,
-        "focus_explanation": (parsed.get("focus_explanation") or f"Focus on the {concept} block and keep the rest unchanged.").strip(),
-        "helper_message": (parsed.get("helper_message") or "Talk through the highlighted lines and apply only the minimal fix.").strip(),
+        "focus_explanation": f"Full reference solution for `{function_name}` is shown below with highlight on lines that differ.",
+        "helper_message": "Walk the helpee through only the highlighted diffs.",
         "changed_lines": changed_lines,
         "changed_line_ranges": normalized_ranges,
     }
@@ -2043,6 +2049,7 @@ async def _generate_help_guidance_for_session(helper_id: str, helpee_id: str):
             "focus_line_start": session.get("focusLineStart", 1),
             "focus_line_end": session.get("focusLineEnd", 1),
             "helper_evidence": session.get("helperEvidenceCode", ""),
+            "solution_function_code": session.get("solutionFunctionCode", ""),
             "solution_reference": session.get("solutionReference", ""),
         },
     )
@@ -2061,6 +2068,7 @@ async def _generate_help_guidance_for_session(helper_id: str, helpee_id: str):
             "focusLineEnd": session.get("focusLineEnd", 1),
             "focusCode": session.get("focusCode", ""),
             "helperEvidenceCode": session.get("helperEvidenceCode", ""),
+            "solutionFunctionCode": session.get("solutionFunctionCode", ""),
             "solutionReference": session.get("solutionReference", ""),
             "correctedCode": guidance.get("corrected_code", ""),
             "focusExplanation": guidance.get("focus_explanation", ""),
@@ -2155,15 +2163,41 @@ async def share_help_to_helpee(body: HelpShareBody):
     helper_id = normalize_participant_id(body.helperId)
     helpee_id = normalize_participant_id(body.helpeeId)
     shared_code = body.code
+    function_name = (body.functionName or "").strip()
 
     if not helper_id or not helpee_id or not shared_code.strip():
         return {"status": "error", "message": "Missing helperId, helpeeId, or code."}
 
     session_key = _help_session_key(helper_id, helpee_id)
-    if session_key not in editor_manager.active_help_context:
+    session = editor_manager.active_help_context.get(session_key)
+    if not session:
         return {"status": "error", "message": "No active help context for this helper/helpee pair."}
 
-    editor_manager.update_individual(helpee_id, shared_code)
+    resolved_share = _extract_function_for_share(function_name, shared_code)
+    if not resolved_share:
+        return {"status": "error", "message": "Shared code must include a valid top-level function."}
+    resolved_name, resolved_function_code = resolved_share
+
+    expected_function = session.get("functionName", "")
+    if expected_function and resolved_name != expected_function:
+        return {
+            "status": "error",
+            "message": f"Share target mismatch. Expected '{expected_function}' but received '{resolved_name}'.",
+        }
+
+    helpee_current_code = editor_manager.individual.get(helpee_id, "")
+    merged_code = _replace_top_level_function_in_code(
+        original_code=helpee_current_code,
+        function_name=resolved_name,
+        replacement_code=resolved_function_code,
+    )
+    if merged_code is None:
+        return {
+            "status": "error",
+            "message": f"Unable to merge shared function '{resolved_name}' into helpee editor.",
+        }
+
+    editor_manager.update_individual(helpee_id, merged_code)
     await socketManager.broadcast(json.dumps({
         "event": "monitorPlayground",
         "payload": {"editors": editor_manager.individual},
@@ -2174,10 +2208,11 @@ async def share_help_to_helpee(body: HelpShareBody):
         "payload": {
             "helperId": helper_id,
             "helpeeId": helpee_id,
-            "code": shared_code,
+            "functionName": resolved_name,
+            "code": resolved_function_code,
         },
     }))
-    return {"status": "success", "sessionKey": session_key}
+    return {"status": "success", "sessionKey": session_key, "functionName": resolved_name}
 
 
 @app.get("/profiles")

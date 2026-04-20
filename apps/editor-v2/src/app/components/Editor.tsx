@@ -15,7 +15,6 @@ import { ReactFlowProvider } from '@xyflow/react';
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
 import { Extension, StateField, EditorState, RangeSetBuilder, Prec } from "@codemirror/state";
 import { createPersonalEditorUpdateExtension } from './modals/extension';
-import HelpSessionStartedModal from './modals/HelpSessionModal';
 import { BACKEND_URL, WS_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
 
@@ -224,6 +223,11 @@ function getFunctionRanges(code: string): FunctionRange[] {
       name: header.name,
     };
   });
+}
+
+function getFunctionByName(code: string, name: string): FunctionRange | null {
+  if (!name) return null;
+  return getFunctionRanges(code).find((fn) => fn.name === name) || null;
 }
 
 function getFunctionAtPosition(code: string, position: number): FunctionRange | null {
@@ -636,7 +640,8 @@ export default function Editor() {
   } | null>(null);
   const [helperGuidanceLoading, setHelperGuidanceLoading] = useState(false);
   const [helperGuidance, setHelperGuidance] = useState<{
-    correctedCode: string;
+    displayCode: string;
+    functionName: string;
     focusExplanation: string;
     helperMessage: string;
     changedLines: string[];
@@ -688,8 +693,10 @@ export default function Editor() {
     window.addEventListener('canary-focus-helpee', handler);
     return () => window.removeEventListener('canary-focus-helpee', handler);
   }, [storedUserId]);
+  const assistRequestActiveRef = useRef(false);
 
   const requestPeerAssist = useCallback((source: 'copilot-tab' | 'button') => {
+    if (assistRequestActiveRef.current) return;
     const ws = wsRef.current;
     const helpeeProfile = participantProfilesRef.current[storedUserId];
     const personalView = personalEditorViewRef.current;
@@ -698,7 +705,7 @@ export default function Editor() {
       : null;
     const helperConcept = copilotSuggestion?.concept || 'this task';
     const helperId = copilotSuggestion?.helperId || '';
-    const helperName = copilotSuggestion?.helperName || 'a helper';
+    const helperName = copilotSuggestion?.helperName || 'Peer helper';
     const helperPhoto = copilotSuggestion?.helperPhoto || null;
     const anchorKeyword = copilotSuggestion?.anchorKeyword || 'pass';
     const functionName = copilotSuggestion?.functionName || activeFunction?.name || '';
@@ -729,18 +736,11 @@ export default function Editor() {
     });
     setCopilotSuggestion(null);
     setHelpeeFixHint(null);
-    setInlineHelpExtension([
-      createInlineHelpField(`${helperName} assist requested. Waiting for acceptance...`),
-    ]);
+    setInlineHelpExtension([]);
+    assistRequestActiveRef.current = true;
   }, [copilotSuggestion, personalCode, storedUserId]);
 
   const [personalEditorExtensions, setPersonalEditorExtensions] = useState<Extension[]>(() => [python(), ...pythonIndent]);
-  const [isSessionStartedModalOpen, setIsSessionStartedModalOpen] = useState(false);
-  const [sessionDetails, setSessionDetails] = useState({
-    totalDurationSeconds: 150,
-    taskContext: '',
-    helperName: ''
-  });
   const [taskSuggestionOptions, setTaskSuggestionOptions] = useState<unknown[]>([]);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSuggestionKeyRef = useRef<string | null>(null);
@@ -865,8 +865,8 @@ export default function Editor() {
     [helpeeFixHint]
   );
   const helperDraftChangedExtension = useMemo(
-    () => (helperGuidance?.correctedCode && helperGuidance?.changedLineRanges?.length)
-      ? [createDraftChangedLinesExtension(helperGuidance.correctedCode, helperGuidance.changedLineRanges)]
+    () => (helperGuidance?.displayCode && helperGuidance?.changedLineRanges?.length)
+      ? [createDraftChangedLinesExtension(helperGuidance.displayCode, helperGuidance.changedLineRanges)]
       : [],
     [helperGuidance]
   );
@@ -936,6 +936,7 @@ export default function Editor() {
       setHelpSessionTimeLeft(prev => {
         if (prev <= 1) {
           setHelpSessionActive(false);
+          assistRequestActiveRef.current = false;
           return 0;
         }
         return prev - 1;
@@ -987,10 +988,6 @@ export default function Editor() {
       catch (error) { console.error("Failed to parse JSON:", match[1]); return null; }
     }).filter(json => json !== null);
   }
-
-  const handleCloseSessionStartedModal = () => {
-    setIsSessionStartedModalOpen(false);
-  };
 
   useEffect(() => {
     if (storedUserId && !wsRef.current) {
@@ -1060,13 +1057,9 @@ export default function Editor() {
           setRemoteTeamCursors(nextRemoteCursors);
         }
         if (data['event'] === 'StartHelpSession') {
-          const { helper, helpee, time, hint, concept } = data['payload'];
+          const { helper, helpee, time } = data['payload'];
           if (helper === storedUserId || helpee === storedUserId) {
             const totalDurationSeconds = time;
-            const taskContext = (hint || `Please help with ${concept || 'this concept'}`) + " please go over to their screen and help them. ";
-            const helperName = helper;
-            setSessionDetails({ totalDurationSeconds, taskContext, helperName });
-            setIsSessionStartedModalOpen(true);
 
             if (helpee === storedUserId) {
               setHelpSessionActive(true);
@@ -1163,6 +1156,9 @@ export default function Editor() {
           const { helperId, helpeeId, concept } = data['payload'] || {};
           if (helpeeId === storedUserId) {
             const helperProfile = participantProfilesRef.current[helperId] || { name: helperId, photo: null };
+            assistRequestActiveRef.current = true;
+            setCopilotSuggestion(null);
+            setInlineHelpExtension([]);
             setAssistWidget({
               status: 'accepted',
               helperId,
@@ -1181,19 +1177,21 @@ export default function Editor() {
         if (data['event'] === 'helpGuidanceReady') {
           const payload = data['payload'] || {};
           if (payload.helperId === storedUserId) {
+            const displayCode = (payload.solutionFunctionCode || payload.correctedCode || '').trim();
             setHelperGuidanceLoading(false);
             setHelperGuidance({
-              correctedCode: payload.correctedCode || '',
+              displayCode,
+              functionName: payload.function || '',
               focusExplanation: payload.focusExplanation || '',
               helperMessage: payload.helperMessage || '',
               changedLines: payload.changedLines || [],
               changedLineRanges: payload.changedLineRanges || [],
               concept: payload.concept || '',
             });
-            if (typeof payload.correctedCode === 'string' && payload.correctedCode.trim()) {
+            if (displayCode) {
               setPersonalCode((prev) => {
                 const marker = "# --- Peer Assist Draft";
-                const nextDraft = `${marker} for ${payload.helpeeId}\n${payload.correctedCode}\n# --- End Peer Assist Draft ---\n\n`;
+                const nextDraft = `${marker} for ${payload.helpeeId}\n${displayCode}\n# --- End Peer Assist Draft ---\n\n`;
                 if (prev.includes(marker)) {
                   return prev.replace(/# --- Peer Assist Draft[\s\S]*?# --- End Peer Assist Draft ---\n\n/, nextDraft);
                 }
@@ -1203,6 +1201,9 @@ export default function Editor() {
           }
           if (payload.helpeeId === storedUserId) {
             const helperProfile = participantProfilesRef.current[payload.helperId] || { name: payload.helperId, photo: null };
+            assistRequestActiveRef.current = true;
+            setCopilotSuggestion(null);
+            setInlineHelpExtension([]);
             setAssistWidget(null);
             setHelpeeFixHint({
               helperId: payload.helperId,
@@ -1217,12 +1218,17 @@ export default function Editor() {
         if (data['event'] === 'helpDraftShared') {
           const { helpeeId } = data['payload'] || {};
           if (helpeeId === storedUserId) {
+            assistRequestActiveRef.current = false;
+            setInlineHelpExtension([]);
             setHelpeeFixHint(null);
           }
         }
         if (data['event'] === 'helperSuggestion') {
           const { suggestion, detectedConcepts, anchorKeyword } = data['payload'];
           if (suggestion) {
+            if (assistRequestActiveRef.current) {
+              return;
+            }
             const conceptLabel = detectedConcepts[0] || 'this';
             const key = `${suggestion.helperId || suggestion.helperName}::${conceptLabel}`;
 
@@ -1385,6 +1391,17 @@ export default function Editor() {
 
   const shareDraftWithHelpee = useCallback(async () => {
     if (!activeHelpAsHelper) return;
+    const requestedFunctionName = helperGuidance?.functionName || '';
+    const selectedFunction = getFunctionByName(personalCode, requestedFunctionName);
+    const fallbackAtCursor = personalEditorViewRef.current
+      ? getFunctionAtPosition(personalCode, personalEditorViewRef.current.state.selection.main.head)
+      : null;
+    const functionToShare = selectedFunction || fallbackAtCursor;
+    if (!functionToShare) {
+      console.warn('No function found to share with helpee.');
+      return;
+    }
+
     try {
       await fetch(`${BACKEND_URL}/help/share`, {
         method: 'POST',
@@ -1392,13 +1409,14 @@ export default function Editor() {
         body: JSON.stringify({
           helperId: storedUserId,
           helpeeId: activeHelpAsHelper.helpeeId,
-          code: personalCode,
+          functionName: functionToShare.name,
+          code: functionToShare.text,
         }),
       });
     } catch (error) {
       console.error('Failed to share draft with helpee:', error);
     }
-  }, [activeHelpAsHelper, personalCode, storedUserId]);
+  }, [activeHelpAsHelper, helperGuidance, personalCode, storedUserId]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -1840,16 +1858,6 @@ export default function Editor() {
           </Panel>
         </PanelGroup>
       </Container>
-
-      {isSessionStartedModalOpen && (
-        <HelpSessionStartedModal
-          isOpen={isSessionStartedModalOpen}
-          onClose={handleCloseSessionStartedModal}
-          totalDurationSeconds={sessionDetails.totalDurationSeconds}
-          taskContext={sessionDetails.taskContext}
-          helperName={sessionDetails.helperName}
-        />
-      )}
 
       {/* LeetCode-style Task Detail Drawer */}
       <Drawer
