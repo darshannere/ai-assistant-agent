@@ -1375,25 +1375,30 @@ def detect_concepts_from_code(code: str) -> list[str]:
 def find_helper_for_concepts(requester_id: str, concepts: list[str]) -> dict | None:
     """Find ONE helper who has completed a task with matching concepts.
     Returns the best match (most overlapping concepts) or None."""
+    matches = find_helpers_for_concepts(requester_id, concepts)
+    return matches[0] if matches else None
+
+
+def find_helpers_for_concepts(requester_id: str, concepts: list[str]) -> list[dict]:
+    """Find all helpers who have completed overlapping concepts, sorted best-first."""
     requester_id = requester_id.replace('"', '')
-    best_match = None
-    best_count = 0
+    matches: list[tuple[int, dict]] = []
 
     for other_id, their_concepts in editor_manager.participant_concepts.items():
         if other_id.replace('"', '') == requester_id:
             continue
         matching = set(concepts) & set(their_concepts)
-        if matching and len(matching) > best_count:
-            best_count = len(matching)
+        if matching:
             other_profile = profile_manager.get_profile(other_id.replace('"', ''))
-            best_match = {
+            matches.append((len(matching), {
                 "helperId": other_id.replace('"', ''),
                 "helperName": other_profile.name if other_profile else other_id,
                 "helperPhoto": other_profile.photo if other_profile else None,
                 "concepts": list(matching),
-            }
+            }))
 
-    return best_match
+    matches.sort(key=lambda item: (-item[0], item[1]["helperId"]))
+    return [match for _, match in matches]
 
 
 # Debounce tracking: last time we ran concept detection per participant
@@ -2550,10 +2555,12 @@ async def detect_helper_from_code(body: dict):
         return {"suggestion": None, "detectedConcepts": []}
 
     # Step 3: find ONE helper
-    suggestion = find_helper_for_concepts(participant_id, detected)
+    helper_matches = find_helpers_for_concepts(participant_id, detected)
+    suggestion = helper_matches[0] if helper_matches else None
 
     return {
         "suggestion": suggestion,
+        "helperCount": len(helper_matches),
         "detectedConcepts": detected,
     }
 

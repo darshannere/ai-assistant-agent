@@ -19,15 +19,77 @@ import { createPersonalEditorUpdateExtension } from './modals/extension';
 import { BACKEND_URL, WS_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
 
+type InlineHelpSuggestionDisplay = {
+  text: string;
+  helperName?: string;
+  helperPhoto?: string | null;
+  showIdentity?: boolean;
+};
+
+function createAvatarNode(name: string, photo: string | null, size = 18) {
+  if (photo) {
+    const img = document.createElement('img');
+    img.src = photo;
+    img.alt = name;
+    img.style.width = `${size}px`;
+    img.style.height = `${size}px`;
+    img.style.borderRadius = '50%';
+    img.style.objectFit = 'cover';
+    img.style.flexShrink = '0';
+    return img;
+  }
+
+  const fallback = document.createElement('span');
+  fallback.textContent = (name || '?').charAt(0).toUpperCase();
+  fallback.style.width = `${size}px`;
+  fallback.style.height = `${size}px`;
+  fallback.style.display = 'inline-flex';
+  fallback.style.alignItems = 'center';
+  fallback.style.justifyContent = 'center';
+  fallback.style.borderRadius = '50%';
+  fallback.style.background = '#94a3b8';
+  fallback.style.color = '#fff';
+  fallback.style.fontSize = `${Math.max(9, size - 8)}px`;
+  fallback.style.fontWeight = '700';
+  fallback.style.flexShrink = '0';
+  return fallback;
+}
+
+function formatConceptQuestion(concept: string) {
+  const normalized = concept.trim().toLowerCase();
+  const conceptPhrases: Record<string, string> = {
+    'looping': 'write a loop',
+    'looping (while loop)': 'write a while loop',
+    'dictionary concepts': 'use a dictionary',
+    'dictionary operation': 'update a dictionary value',
+    'dictionary operations': 'update a dictionary value',
+    'dictionary lookup': 'look up a value in a dictionary',
+    'dictionary iteration': 'loop through a dictionary',
+    'function calling': 'call a function',
+    'conditional': 'write an if/else condition',
+    'conditional (if-else)': 'write an if/else condition',
+    'conditional statements': 'write if/else statements',
+    'conditional statement (if-else)': 'write an if/else statement',
+    'list operations': 'update a list',
+    'list concepts': 'work with a list',
+    'string interpolation': 'format output with an f-string',
+    'object initialization': 'initialize an object',
+    'random num generation': 'generate a random number',
+    'tuple': 'return a tuple',
+  };
+  return conceptPhrases[normalized] || `use ${concept}`;
+}
+
 // --- Copilot-style ghost comment widget (visual hint only; does not alter code) ---
 class CopilotGhostCommentWidget extends WidgetType {
-  constructor(private readonly text: string) { super(); }
+  constructor(private readonly display: InlineHelpSuggestionDisplay) { super(); }
   toDOM() {
     const wrap = document.createElement("span");
     wrap.style.marginLeft = "10px";
     wrap.style.display = "inline-flex";
     wrap.style.alignItems = "center";
-    wrap.style.padding = "0 8px";
+    wrap.style.gap = "8px";
+    wrap.style.padding = "0 10px";
     wrap.style.borderRadius = "6px";
     wrap.style.background = "rgba(148, 163, 184, 0.10)";
     wrap.style.border = "1px dashed rgba(100, 116, 139, 0.45)";
@@ -36,33 +98,133 @@ class CopilotGhostCommentWidget extends WidgetType {
     wrap.style.fontStyle = "italic";
     wrap.style.color = "#64748b";
     wrap.style.lineHeight = "1.8";
-    wrap.textContent = `# ${this.text}`;
+    if (this.display.showIdentity && this.display.helperName) {
+      wrap.appendChild(createAvatarNode(this.display.helperName, this.display.helperPhoto || null, 18));
+    }
+    const text = document.createElement('span');
+    text.textContent = this.display.text;
+    wrap.appendChild(text);
     return wrap;
   }
-  eq(other: CopilotGhostCommentWidget) { return this.text === other.text; }
+  eq(other: CopilotGhostCommentWidget) {
+    return JSON.stringify(this.display) === JSON.stringify(other.display);
+  }
   ignoreEvent() { return true; }
 }
 
-function buildInlineHelpDecoration(state: EditorState, message: string) {
+function buildInlineHelpDecoration(state: EditorState, display: InlineHelpSuggestionDisplay) {
   const cursorPos = state.selection.main.head;
   return Decoration.set([
     Decoration.widget({
-      widget: new CopilotGhostCommentWidget(message),
+      widget: new CopilotGhostCommentWidget(display),
       side: 1,
     }).range(cursorPos),
   ]);
 }
 
-function createInlineHelpField(message: string) {
+function createInlineHelpField(display: InlineHelpSuggestionDisplay) {
   return StateField.define({
-    create(state) { return buildInlineHelpDecoration(state, message); },
+    create(state) { return buildInlineHelpDecoration(state, display); },
     update(decorations, tr) {
       if (!tr.docChanged && !tr.selection) return decorations.map(tr.changes);
-      return buildInlineHelpDecoration(tr.state, message);
+      return buildInlineHelpDecoration(tr.state, display);
     },
     provide: (f) => EditorView.decorations.from(f),
   });
 }
+
+type HelpRequestMarkerMeta = {
+  helperId: string;
+  helperName: string;
+  helperPhoto: string | null;
+  concept: string;
+  helperCount: number;
+};
+
+const HELP_REQUEST_MARKER_PREFIX = '# __PEER_ASSIST_REQUEST__';
+
+function buildHelpRequestMarker(meta: HelpRequestMarkerMeta) {
+  return [
+    HELP_REQUEST_MARKER_PREFIX,
+    encodeURIComponent(meta.helperId || ''),
+    encodeURIComponent(meta.helperName || ''),
+    encodeURIComponent(meta.helperPhoto || ''),
+    encodeURIComponent(meta.concept || ''),
+    String(meta.helperCount || 0),
+  ].join('|') + '\n';
+}
+
+function parseHelpRequestMarker(lineText: string): HelpRequestMarkerMeta | null {
+  if (!lineText.startsWith(HELP_REQUEST_MARKER_PREFIX)) return null;
+  const [, helperId = '', helperName = '', helperPhoto = '', concept = '', helperCount = '0'] = lineText.split('|');
+  return {
+    helperId: decodeURIComponent(helperId || ''),
+    helperName: decodeURIComponent(helperName || ''),
+    helperPhoto: decodeURIComponent(helperPhoto || '') || null,
+    concept: decodeURIComponent(concept || ''),
+    helperCount: Number(helperCount || 0) || 0,
+  };
+}
+
+class HelpRequestWidget extends WidgetType {
+  constructor(private readonly meta: HelpRequestMarkerMeta) { super(); }
+
+  toDOM() {
+    const wrap = document.createElement('span');
+    wrap.style.display = 'inline-flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '8px';
+    wrap.style.padding = '2px 10px';
+    wrap.style.borderRadius = '999px';
+    wrap.style.background = '#f59e0b';
+    wrap.style.color = '#fff';
+    wrap.style.fontSize = '12px';
+    wrap.style.fontWeight = '700';
+    wrap.style.lineHeight = '1.6';
+    wrap.style.boxShadow = '0 2px 10px rgba(245, 158, 11, 0.25)';
+    wrap.style.whiteSpace = 'nowrap';
+
+    if (this.meta.helperCount <= 1 && this.meta.helperName) {
+      wrap.appendChild(createAvatarNode(this.meta.helperName, this.meta.helperPhoto, 18));
+    }
+
+    const text = document.createElement('span');
+    text.textContent = this.meta.helperCount > 1 || !this.meta.helperName
+      ? 'A peer should help you when free'
+      : `${this.meta.helperName} should help you when free`;
+    wrap.appendChild(text);
+    return wrap;
+  }
+
+  eq(other: HelpRequestWidget) {
+    return JSON.stringify(this.meta) === JSON.stringify(other.meta);
+  }
+}
+
+function buildHelpRequestDecorations(state: EditorState) {
+  const decorations = [];
+  for (let lineNo = 1; lineNo <= state.doc.lines; lineNo += 1) {
+    const line = state.doc.line(lineNo);
+    const markerMeta = parseHelpRequestMarker(line.text);
+    if (!markerMeta) continue;
+    decorations.push(Decoration.replace({
+      widget: new HelpRequestWidget(markerMeta),
+      inclusive: false,
+    }).range(line.from, line.to));
+  }
+  return Decoration.set(decorations, true);
+}
+
+const helpRequestMarkerField = StateField.define({
+  create(state) {
+    return buildHelpRequestDecorations(state);
+  },
+  update(decorations, tr) {
+    if (!tr.docChanged) return decorations.map(tr.changes);
+    return buildHelpRequestDecorations(tr.state);
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 // --- Run Icon Gutter (green play button on def lines) ---
 class RunIconMarker extends GutterMarker {
@@ -298,13 +460,6 @@ function replaceFunctionInCode(code: string, functionName: string, replacementTe
   const after = code.slice(target.to);
   const replacement = `${replacementText.trimEnd()}\n`;
   return `${before}${replacement}${after}`.replace(/\n{3,}/g, '\n\n');
-}
-
-function buildHelpRequestMarker(helperName: string, concept: string) {
-  const parts = ['# HELP requested'];
-  if (helperName) parts.push(`from ${helperName}`);
-  if (concept) parts.push(`for ${concept}`);
-  return `${parts.join(' ')}\n`;
 }
 
 function stripHelpMarker(code: string, marker: string | null) {
@@ -754,6 +909,7 @@ export default function Editor() {
     helperId: string;
     helperName: string;
     helperPhoto: string | null;
+    helperCount: number;
     concept: string;
     anchorKeyword: string;
     functionName: string;
@@ -762,6 +918,7 @@ export default function Editor() {
     helperId: string;
     helperName: string;
     helperPhoto: string | null;
+    helperCount: number;
     concept: string;
     anchorKeyword: string;
     functionName: string;
@@ -873,6 +1030,7 @@ export default function Editor() {
     const helperId = copilotSuggestion?.helperId || '';
     const helperName = copilotSuggestion?.helperName || 'Peer helper';
     const helperPhoto = copilotSuggestion?.helperPhoto || null;
+    const helperCount = copilotSuggestion?.helperCount || 1;
     const anchorKeyword = copilotSuggestion?.anchorKeyword || 'pass';
     const functionName = copilotSuggestion?.functionName || activeFunction?.name || '';
 
@@ -893,14 +1051,14 @@ export default function Editor() {
         }
       }));
     }
-    setAssistWidget({
-      status: 'requested',
+    setAssistWidget(null);
+    const marker = buildHelpRequestMarker({
       helperId,
       helperName,
       helperPhoto,
       concept: helperConcept,
+      helperCount,
     });
-    const marker = buildHelpRequestMarker(helperName, helperConcept);
     if (personalView) {
       const line = personalView.state.doc.lineAt(personalView.state.selection.main.head);
       const currentDoc = personalView.state.doc.toString();
@@ -1198,11 +1356,7 @@ export default function Editor() {
   }, []);
 
   useEffect(() => {
-    if (
-      assistWidget?.status === 'requested'
-      && helpRequestMarker
-      && !personalCode.includes(helpRequestMarker)
-    ) {
+    if (helpRequestMarker && !personalCode.includes(helpRequestMarker) && !helpSessionActive) {
       assistRequestActiveRef.current = false;
       setAssistWidget(null);
       setHelpRequestMarker(null);
@@ -1212,7 +1366,7 @@ export default function Editor() {
         console.warn('Failed to dismiss help request after marker deletion.');
       });
     }
-  }, [assistWidget, helpRequestMarker, personalCode, storedUserId]);
+  }, [helpRequestMarker, helpSessionActive, personalCode, storedUserId]);
 
   const testSingleFunction = useCallback(async (functionCode: string) => {
     const channel = storedUserId;
@@ -1254,6 +1408,7 @@ export default function Editor() {
     () => [
       ...personalEditorExtensions,
       copilotTabExtension,
+      helpRequestMarkerField,
       runIconField,
       personalRunIconGutter,
       runIconGutterTheme,
@@ -1294,10 +1449,16 @@ export default function Editor() {
   }, [storedUserId]);
 
   const showSuggestionInline = useCallback((suggestion: NonNullable<typeof pendingSuggestion>) => {
+    const questionText = `Don't know how to ${formatConceptQuestion(suggestion.concept)}? Press Tab to learn from your peer.`;
     setCopilotSuggestion(suggestion);
     setInlineHelpExtension([
       createInlineHelpField(
-        `${suggestion.helperName} can help with ${suggestion.concept}. Press Tab to request peer assist.`
+        {
+          text: questionText,
+          helperName: suggestion.helperName,
+          helperPhoto: suggestion.helperPhoto,
+          showIdentity: suggestion.helperCount <= 1,
+        }
       ),
     ]);
   }, []);
@@ -1329,11 +1490,13 @@ export default function Editor() {
       const data = await response.json();
       const suggestion = data?.suggestion;
       const concept = data?.detectedConcepts?.[0] || '';
+      const helperCount = Number(data?.helperCount || 0);
       if (!suggestion || !concept) return;
       const nextSuggestion = {
         helperId: suggestion.helperId || '',
         helperName: suggestion.helperName || 'Peer helper',
         helperPhoto: suggestion.helperPhoto || null,
+        helperCount: helperCount || 1,
         concept,
         anchorKeyword: data?.anchorKeyword || '',
         functionName: '',
@@ -1739,6 +1902,7 @@ export default function Editor() {
                 helperId: suggestion.helperId,
                 helperName: suggestion.helperName,
                 helperPhoto: suggestion.helperPhoto || null,
+                helperCount: 1,
                 concept: conceptLabel,
                 anchorKeyword: anchor,
                 functionName: '',
