@@ -1374,7 +1374,7 @@ export default function Editor() {
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        console.log("Received message:", data);
+        // console.log("Received message:", data);
         if (data['event'] === 'run') {
           console.log(data);
           appendToHistory(data['stdout'], data['all']);
@@ -2254,7 +2254,22 @@ export default function Editor() {
                           Share with {activeHelpAsHelper.helpeeName}
                         </Button>
                       )}
-                      <Button onClick={testCodePlayground} size='compact-xs'>Run Test</Button>
+                      <Button onClick={testCodePlayground} size='compact-xs'>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span>Run Test</span>
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              color: '#22c55e',
+                              fontSize: '16px',
+                              fontWeight: 800,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ▶
+                          </span>
+                        </span>
+                      </Button>
                       <Button
                         onClick={toggleSamplePanel}
                         size='compact-xs'

@@ -126,7 +126,7 @@ export default function PuzzleApp({id}: DrawProps) {
       };
       ws.onmessage = (event) => {
           const data = JSON.parse(event.data);
-          console.log("Received message:", data);
+          // console.log("Received message:", data);
           if(data.event==='draw'){
             if (data.payload.status === 'done') {
               console.log("All users have completed the puzzle");
