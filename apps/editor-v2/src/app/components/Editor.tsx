@@ -2254,14 +2254,14 @@ export default function Editor() {
                           Share with {activeHelpAsHelper.helpeeName}
                         </Button>
                       )}
-                      <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
+                      <Button onClick={testCodePlayground} size='compact-xs'>Run Test</Button>
                       <Button
                         onClick={toggleSamplePanel}
                         size='compact-xs'
                         variant='light'
                         disabled={personalFunctionNames.length === 0}
                       >
-                        Try Example
+                        Run Example
                       </Button>
                       {/* <Button onClick={runPersonalCode} size='compact-xs'>Run</Button> */}
                       <Button onClick={clearCode} size='compact-xs'>Clear Console</Button>
