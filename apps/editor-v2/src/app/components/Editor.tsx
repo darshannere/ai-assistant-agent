@@ -4,7 +4,7 @@ import { indentOnInput, indentUnit } from '@codemirror/language';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { keymap } from '@codemirror/view';
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
-import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider } from "@mantine/core"
+import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider, Textarea } from "@mantine/core"
 import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -14,6 +14,7 @@ import GraphComponent from './SMM';
 import { ReactFlowProvider } from '@xyflow/react';
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
 import { Extension, StateField, EditorState, RangeSetBuilder, Prec } from "@codemirror/state";
+import { search, openSearchPanel, searchKeymap } from '@codemirror/search';
 import { createPersonalEditorUpdateExtension } from './modals/extension';
 import { BACKEND_URL, WS_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
@@ -173,6 +174,36 @@ type RemoteCursor = {
   anchor: number;
   head: number;
 };
+type HelpVariant = {
+  variantId: string;
+  label: string;
+  authorId: string;
+  kind: 'base' | 'helper_share' | 'manual';
+  code: string;
+  changedLineRanges: Array<{ start: number; end: number }>;
+  createdAt: number;
+};
+type HelpComment = {
+  commentId: string;
+  variantId: string;
+  authorId: string;
+  body: string;
+  concept: string;
+  lineStart?: number | null;
+  lineEnd?: number | null;
+  createdAt: number;
+};
+type HelpVariantGroup = {
+  sessionKey: string;
+  functionName: string;
+  baseVariantId: string;
+  concept: string;
+  focusCode: string;
+  focusLineStart: number;
+  focusLineEnd: number;
+  variants: HelpVariant[];
+  comments: HelpComment[];
+};
 
 const userColors = [
   { color: '#30bced', light: '#30bced33' },
@@ -241,6 +272,27 @@ function getFunctionAtPosition(code: string, position: number): FunctionRange | 
   }
 
   return functionRanges.find((range) => clampedPosition < range.from) || null;
+}
+
+function replaceFunctionInCode(code: string, functionName: string, replacementText: string) {
+  const target = getFunctionByName(code, functionName);
+  if (!target) return code;
+  const before = code.slice(0, target.from);
+  const after = code.slice(target.to);
+  const replacement = `${replacementText.trimEnd()}\n`;
+  return `${before}${replacement}${after}`.replace(/\n{3,}/g, '\n\n');
+}
+
+function buildHelpRequestMarker(helperName: string, concept: string) {
+  const parts = ['# HELP requested'];
+  if (helperName) parts.push(`from ${helperName}`);
+  if (concept) parts.push(`for ${concept}`);
+  return `${parts.join(' ')}\n`;
+}
+
+function stripHelpMarker(code: string, marker: string | null) {
+  if (!marker) return code;
+  return code.replace(marker, '');
 }
 
 class RemoteCursorWidget extends WidgetType {
@@ -577,6 +629,74 @@ function createDraftChangedLinesExtension(
   });
 }
 
+function createFunctionLineHighlightExtension(
+  functionName: string,
+  changedLineRanges: Array<{ start: number; end: number }>
+) {
+  const buildDecorations = (state: EditorState) => {
+    if (!functionName || changedLineRanges.length === 0) return Decoration.none;
+    const doc = state.doc.toString();
+    const target = getFunctionByName(doc, functionName);
+    if (!target) return Decoration.none;
+
+    const targetLines = target.text.split('\n');
+    const lineOffsets: number[] = [];
+    let offset = 0;
+    for (const line of targetLines) {
+      lineOffsets.push(offset);
+      offset += line.length + 1;
+    }
+
+    const decorations = [];
+    for (const range of changedLineRanges) {
+      const start = Math.max(1, Math.min(range.start, targetLines.length));
+      const end = Math.max(start, Math.min(range.end, targetLines.length));
+      for (let lineNo = start; lineNo <= end; lineNo += 1) {
+        const absoluteOffset = target.from + lineOffsets[lineNo - 1];
+        const line = state.doc.lineAt(absoluteOffset);
+        decorations.push(
+          Decoration.line({
+            attributes: {
+              style: 'background: rgba(59, 130, 246, 0.10); border-left: 3px solid rgba(14, 165, 233, 0.9);',
+            },
+          }).range(line.from)
+        );
+      }
+    }
+
+    return Decoration.set(decorations, true);
+  };
+
+  return StateField.define({
+    create(state) { return buildDecorations(state); },
+    update(decorations, tr) {
+      if (!tr.docChanged) return decorations.map(tr.changes);
+      return buildDecorations(tr.state);
+    },
+    provide: (field) => EditorView.decorations.from(field),
+  });
+}
+
+function createPersistentSearchExtension() {
+  return [
+    search({ top: true }),
+    keymap.of([{
+      key: 'Mod-f',
+      run(view) {
+        openSearchPanel(view);
+        return true;
+      },
+    }, ...searchKeymap]),
+    ViewPlugin.fromClass(class {
+      update(update: ViewUpdate) {
+        if (!update.view.dom.querySelector('.cm-search')) {
+          openSearchPanel(update.view);
+        }
+      }
+    }),
+  ];
+}
+
 export default function Editor() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [personalCode, setPersonalCode] = useState("");
@@ -616,6 +736,14 @@ export default function Editor() {
     anchorKeyword: string;
     functionName: string;
   } | null>(null);
+  const [pendingSuggestion, setPendingSuggestion] = useState<{
+    helperId: string;
+    helperName: string;
+    helperPhoto: string | null;
+    concept: string;
+    anchorKeyword: string;
+    functionName: string;
+  } | null>(null);
   const [assistWidget, setAssistWidget] = useState<{
     status: 'requested' | 'accepted';
     helperId: string;
@@ -623,6 +751,7 @@ export default function Editor() {
     helperPhoto: string | null;
     concept: string;
   } | null>(null);
+  const [helpRequestMarker, setHelpRequestMarker] = useState<string | null>(null);
   const [helpeeFixHint, setHelpeeFixHint] = useState<{
     helperId: string;
     helperName: string;
@@ -649,6 +778,11 @@ export default function Editor() {
     concept: string;
   } | null>(null);
   const [autoStartingHelpFor, setAutoStartingHelpFor] = useState<string | null>(null);
+  const [helpVariantGroup, setHelpVariantGroup] = useState<HelpVariantGroup | null>(null);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
+  const [variantPanelOpen, setVariantPanelOpen] = useState(false);
+  const [shareCommentDraft, setShareCommentDraft] = useState('');
+  const [variantCommentDraft, setVariantCommentDraft] = useState('');
 
   // Proactive helper suggestions (for app-shell helper list)
   const [helperSuggestions, setHelperSuggestions] = useState<Array<{
@@ -694,6 +828,10 @@ export default function Editor() {
     return () => window.removeEventListener('canary-focus-helpee', handler);
   }, [storedUserId]);
   const assistRequestActiveRef = useRef(false);
+  const idleSuggestionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousPersonalCodeRef = useRef('');
+  const pendingSuggestionRef = useRef<typeof pendingSuggestion>(null);
+  const helpRequestMarkerRef = useRef<string | null>(null);
 
   const requestPeerAssist = useCallback((source: 'copilot-tab' | 'button') => {
     if (assistRequestActiveRef.current) return;
@@ -734,7 +872,19 @@ export default function Editor() {
       helperPhoto,
       concept: helperConcept,
     });
+    const marker = buildHelpRequestMarker(helperName, helperConcept);
+    if (personalView) {
+      const line = personalView.state.doc.lineAt(personalView.state.selection.main.head);
+      const currentDoc = personalView.state.doc.toString();
+      const nextCode = `${currentDoc.slice(0, line.from)}${marker}${currentDoc.slice(line.from)}`;
+      setPersonalCode(nextCode);
+    } else {
+      setPersonalCode((prev) => `${marker}${prev}`);
+    }
+    helpRequestMarkerRef.current = marker;
+    setHelpRequestMarker(marker);
     setCopilotSuggestion(null);
+    setPendingSuggestion(null);
     setHelpeeFixHint(null);
     setInlineHelpExtension([]);
     assistRequestActiveRef.current = true;
@@ -756,6 +906,16 @@ export default function Editor() {
 
   const otherParticipants = ALL_PARTICIPANTS.filter(p => p !== storedUserId && participantProfiles[p]);
   const pendingHelpIds = useMemo(() => new Set(pendingHelpRequests.map((r) => r.helpeeId)), [pendingHelpRequests]);
+  const selectedHelpVariant = useMemo(
+    () => helpVariantGroup?.variants.find((variant) => variant.variantId === selectedVariantId)
+      || helpVariantGroup?.variants[helpVariantGroup.variants.length - 1]
+      || null,
+    [helpVariantGroup, selectedVariantId]
+  );
+  const selectedVariantComments = useMemo(
+    () => helpVariantGroup?.comments.filter((comment) => comment.variantId === selectedHelpVariant?.variantId) || [],
+    [helpVariantGroup, selectedHelpVariant]
+  );
   const taskOwnerByFunction = useMemo(() => {
     const map: Record<string, string> = {};
     Object.entries(teamParticipantStates).forEach(([pid, state]) => {
@@ -765,6 +925,14 @@ export default function Editor() {
     });
     return map;
   }, [teamParticipantStates]);
+
+  useEffect(() => {
+    pendingSuggestionRef.current = pendingSuggestion;
+  }, [pendingSuggestion]);
+
+  useEffect(() => {
+    helpRequestMarkerRef.current = helpRequestMarker;
+  }, [helpRequestMarker]);
 
   useEffect(() => {
     const localProfiles = ALL_PARTICIPANTS.reduce<Record<string, ParticipantProfile>>((acc, participantId) => {
@@ -844,6 +1012,11 @@ export default function Editor() {
       });
   }, [activeTab, storedUserId, pendingHelpIds, activeHelpAsHelper, autoStartingHelpFor]);
 
+  useEffect(() => {
+    if (activeTab !== 'team' || !teamEditorViewRef.current) return;
+    openSearchPanel(teamEditorViewRef.current);
+  }, [activeTab]);
+
   const getParticipantProfile = useCallback((participantId: string) => {
     return participantProfiles[participantId] || { name: participantId, photo: null };
   }, [participantProfiles]);
@@ -865,10 +1038,12 @@ export default function Editor() {
     [helpeeFixHint]
   );
   const helperDraftChangedExtension = useMemo(
-    () => (helperGuidance?.displayCode && helperGuidance?.changedLineRanges?.length)
-      ? [createDraftChangedLinesExtension(helperGuidance.displayCode, helperGuidance.changedLineRanges)]
+    () => (helpVariantGroup?.functionName && selectedHelpVariant?.changedLineRanges?.length)
+      ? [createFunctionLineHighlightExtension(helpVariantGroup.functionName, selectedHelpVariant.changedLineRanges)]
+      : (helperGuidance?.displayCode && helperGuidance?.changedLineRanges?.length)
+        ? [createDraftChangedLinesExtension(helperGuidance.displayCode, helperGuidance.changedLineRanges)]
       : [],
-    [helperGuidance]
+    [helpVariantGroup, selectedHelpVariant, helperGuidance]
   );
   const copilotTabExtension = useMemo(
     () => Prec.high(keymap.of([{
@@ -882,15 +1057,34 @@ export default function Editor() {
     [copilotSuggestion, assistWidget, helpSessionActive, requestPeerAssist]
   );
 
-  const handlePersonalEditorChange = useCallback((value: string) => {
-    setPersonalCode(value);
-  }, []);
-
   useEffect(() => {
     const view = personalEditorViewRef.current;
     if (!view) return;
     replaceEditorDoc(view, personalCode);
   }, [personalCode]);
+
+  useEffect(() => {
+    return () => {
+      if (idleSuggestionTimerRef.current) clearTimeout(idleSuggestionTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      assistWidget?.status === 'requested'
+      && helpRequestMarker
+      && !personalCode.includes(helpRequestMarker)
+    ) {
+      assistRequestActiveRef.current = false;
+      setAssistWidget(null);
+      setHelpRequestMarker(null);
+      setPendingSuggestion(null);
+      setInlineHelpExtension([]);
+      fetch(`${BACKEND_URL}/helpQueue/dismiss/${storedUserId}`, { method: 'POST' }).catch(() => {
+        console.warn('Failed to dismiss help request after marker deletion.');
+      });
+    }
+  }, [assistWidget, helpRequestMarker, personalCode, storedUserId]);
 
   const testSingleFunction = useCallback(async (functionCode: string) => {
     const channel = storedUserId;
@@ -913,6 +1107,10 @@ export default function Editor() {
       void testSingleFunction(functionCode);
     }),
     [testSingleFunction]
+  );
+  const teamSearchExtensions = useMemo(
+    () => createPersistentSearchExtension(),
+    []
   );
 
   const personalEditorResolvedExtensions = useMemo(
@@ -980,6 +1178,142 @@ export default function Editor() {
       },
     }));
   }, [storedUserId]);
+
+  const showSuggestionInline = useCallback((suggestion: NonNullable<typeof pendingSuggestion>) => {
+    setCopilotSuggestion(suggestion);
+    setInlineHelpExtension([
+      createInlineHelpField(
+        `${suggestion.helperName} can help with ${suggestion.concept}. Press Tab to request peer assist.`
+      ),
+    ]);
+  }, []);
+
+  const scheduleIdleSuggestionReveal = useCallback((nextSuggestion?: typeof pendingSuggestionRef.current) => {
+    if (idleSuggestionTimerRef.current) clearTimeout(idleSuggestionTimerRef.current);
+    setInlineHelpExtension([]);
+    setCopilotSuggestion(null);
+    const suggestionToShow = nextSuggestion ?? pendingSuggestionRef.current;
+    if (!suggestionToShow || assistRequestActiveRef.current) return;
+
+    idleSuggestionTimerRef.current = setTimeout(() => {
+      if (assistRequestActiveRef.current || !pendingSuggestionRef.current) return;
+      showSuggestionInline(pendingSuggestionRef.current);
+    }, 5000);
+  }, [showSuggestionInline]);
+
+  const fetchHelperSuggestion = useCallback(async (codeToInspect: string, immediate = false) => {
+    if (!codeToInspect.trim() || assistRequestActiveRef.current) return;
+    try {
+      const response = await fetch(`${BACKEND_URL}/detectHelper`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          participant_id: storedUserId,
+          code: codeToInspect,
+        }),
+      });
+      const data = await response.json();
+      const suggestion = data?.suggestion;
+      const concept = data?.detectedConcepts?.[0] || '';
+      if (!suggestion || !concept) return;
+      const nextSuggestion = {
+        helperId: suggestion.helperId || '',
+        helperName: suggestion.helperName || 'Peer helper',
+        helperPhoto: suggestion.helperPhoto || null,
+        concept,
+        anchorKeyword: data?.anchorKeyword || '',
+        functionName: '',
+      };
+      setPendingSuggestion(nextSuggestion);
+      if (immediate) {
+        if (idleSuggestionTimerRef.current) clearTimeout(idleSuggestionTimerRef.current);
+        showSuggestionInline(nextSuggestion);
+      } else {
+        scheduleIdleSuggestionReveal(nextSuggestion);
+      }
+    } catch (error) {
+      console.error('Failed to fetch helper suggestion:', error);
+    }
+  }, [scheduleIdleSuggestionReveal, showSuggestionInline, storedUserId]);
+
+  const handlePersonalEditorChange = useCallback((value: string) => {
+    setPersonalCode(value);
+    setInlineHelpExtension([]);
+    setCopilotSuggestion(null);
+    if (!assistRequestActiveRef.current) {
+      scheduleIdleSuggestionReveal();
+    }
+
+    const previousCode = previousPersonalCodeRef.current;
+    const justTypedTodo = value.includes('TODO') && !previousCode.includes('TODO');
+    if (justTypedTodo && !assistRequestActiveRef.current) {
+      const view = personalEditorViewRef.current;
+      const targetFunction = view
+        ? getFunctionAtPosition(value, view.state.selection.main.head)
+        : null;
+      void fetchHelperSuggestion(targetFunction?.text || value, true);
+    }
+
+    previousPersonalCodeRef.current = value;
+  }, [fetchHelperSuggestion, scheduleIdleSuggestionReveal]);
+
+  const applyVariantToEditor = useCallback((variant: HelpVariant) => {
+    if (!helpVariantGroup) return;
+    setPersonalCode((prev) => replaceFunctionInCode(prev, helpVariantGroup.functionName, variant.code));
+  }, [helpVariantGroup]);
+
+  const createManualVariant = useCallback(async () => {
+    const targetFunctionName = helpVariantGroup?.functionName || helperGuidance?.functionName || '';
+    if (!targetFunctionName) return;
+    const targetFunction = getFunctionByName(personalCode, targetFunctionName);
+    if (!targetFunction) return;
+    const helperId = activeHelpAsHelper
+      ? storedUserId
+      : (helpVariantGroup?.sessionKey.split('::')[0] || '');
+    const helpeeId = activeHelpAsHelper ? activeHelpAsHelper.helpeeId : storedUserId;
+    try {
+      await fetch(`${BACKEND_URL}/help/variant/manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          participantId: storedUserId,
+          helperId,
+          helpeeId,
+          functionName: targetFunctionName,
+          code: targetFunction.text,
+          concept: helpVariantGroup?.concept || helperGuidance?.concept || '',
+        }),
+      });
+    } catch (error) {
+      console.error('Failed to create manual variant:', error);
+    }
+  }, [activeHelpAsHelper, helpVariantGroup, helperGuidance, personalCode, storedUserId]);
+
+  const addCommentToVariant = useCallback(async () => {
+    if (!helpVariantGroup || !selectedHelpVariant || !variantCommentDraft.trim()) return;
+    const helperId = activeHelpAsHelper ? storedUserId : (helpVariantGroup.sessionKey.split('::')[0] || '');
+    const helpeeId = activeHelpAsHelper ? activeHelpAsHelper.helpeeId : storedUserId;
+    try {
+      await fetch(`${BACKEND_URL}/help/comment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          authorId: storedUserId,
+          helperId,
+          helpeeId,
+          functionName: helpVariantGroup.functionName,
+          variantId: selectedHelpVariant.variantId,
+          body: variantCommentDraft,
+          concept: helpVariantGroup.concept,
+          lineStart: helpVariantGroup.focusLineStart,
+          lineEnd: helpVariantGroup.focusLineEnd,
+        }),
+      });
+      setVariantCommentDraft('');
+    } catch (error) {
+      console.error('Failed to add variant comment:', error);
+    }
+  }, [activeHelpAsHelper, helpVariantGroup, selectedHelpVariant, storedUserId, variantCommentDraft]);
 
   function extractJsons(text: string): object[] {
     const jsonMatches = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)];
@@ -1060,6 +1394,9 @@ export default function Editor() {
           const { helper, helpee, time } = data['payload'];
           if (helper === storedUserId || helpee === storedUserId) {
             const totalDurationSeconds = time;
+            setHelpVariantGroup(null);
+            setSelectedVariantId(null);
+            setVariantPanelOpen(false);
 
             if (helpee === storedUserId) {
               setHelpSessionActive(true);
@@ -1158,7 +1495,12 @@ export default function Editor() {
             const helperProfile = participantProfilesRef.current[helperId] || { name: helperId, photo: null };
             assistRequestActiveRef.current = true;
             setCopilotSuggestion(null);
+            setPendingSuggestion(null);
             setInlineHelpExtension([]);
+            const currentMarker = helpRequestMarkerRef.current;
+            setHelpRequestMarker(null);
+            helpRequestMarkerRef.current = null;
+            setPersonalCode((prev) => stripHelpMarker(prev, currentMarker));
             setAssistWidget({
               status: 'accepted',
               helperId,
@@ -1203,7 +1545,12 @@ export default function Editor() {
             const helperProfile = participantProfilesRef.current[payload.helperId] || { name: payload.helperId, photo: null };
             assistRequestActiveRef.current = true;
             setCopilotSuggestion(null);
+            setPendingSuggestion(null);
             setInlineHelpExtension([]);
+            const currentMarker = helpRequestMarkerRef.current;
+            setHelpRequestMarker(null);
+            helpRequestMarkerRef.current = null;
+            setPersonalCode((prev) => stripHelpMarker(prev, currentMarker));
             setAssistWidget(null);
             setHelpeeFixHint({
               helperId: payload.helperId,
@@ -1218,9 +1565,34 @@ export default function Editor() {
         if (data['event'] === 'helpDraftShared') {
           const { helpeeId } = data['payload'] || {};
           if (helpeeId === storedUserId) {
-            assistRequestActiveRef.current = false;
             setInlineHelpExtension([]);
             setHelpeeFixHint(null);
+          }
+        }
+        if (data['event'] === 'helpVariantState') {
+          const payload = data['payload'] as HelpVariantGroup;
+          const participants = payload?.sessionKey?.split('::') || [];
+          if (!payload || !participants.includes(storedUserId)) return;
+          setHelpVariantGroup(payload);
+          const latestVariant = payload.variants[payload.variants.length - 1] || null;
+          setSelectedVariantId((prev) => prev && payload.variants.some((variant) => variant.variantId === prev)
+            ? prev
+            : latestVariant?.variantId || null);
+          setVariantPanelOpen(true);
+        }
+        if (data['event'] === 'helpVariantShared') {
+          const payload = data['payload'] || {};
+          if ([payload.helperId, payload.helpeeId].includes(storedUserId)) {
+            setVariantPanelOpen(true);
+            if (payload.helpeeId === storedUserId) {
+              setHelpeeFixHint(null);
+            }
+          }
+        }
+        if (data['event'] === 'helpVariantCreated' || data['event'] === 'helpCommentAdded') {
+          const payload = data['payload'] || {};
+          if ([payload.helperId, payload.helpeeId].includes(storedUserId)) {
+            setVariantPanelOpen(true);
           }
         }
         if (data['event'] === 'helperSuggestion') {
@@ -1256,19 +1628,16 @@ export default function Editor() {
             if (lastSuggestionKeyRef.current !== key) {
               lastSuggestionKeyRef.current = key;
               const anchor = anchorKeyword || detectedConcepts[0] || 'pass';
-              setCopilotSuggestion({
+              const nextSuggestion = {
                 helperId: suggestion.helperId,
                 helperName: suggestion.helperName,
                 helperPhoto: suggestion.helperPhoto || null,
                 concept: conceptLabel,
                 anchorKeyword: anchor,
                 functionName: '',
-              });
-              setInlineHelpExtension([
-                createInlineHelpField(
-                  `${suggestion.helperName} can help with ${conceptLabel}. Press Tab to request peer assist.`
-                ),
-              ]);
+              };
+              setPendingSuggestion(nextSuggestion);
+              scheduleIdleSuggestionReveal(nextSuggestion);
             }
           }
         }
@@ -1411,12 +1780,17 @@ export default function Editor() {
           helpeeId: activeHelpAsHelper.helpeeId,
           functionName: functionToShare.name,
           code: functionToShare.text,
+          concept: helpVariantGroup?.concept || helperGuidance?.concept || '',
+          comment: shareCommentDraft,
+          lineStart: helpVariantGroup?.focusLineStart || null,
+          lineEnd: helpVariantGroup?.focusLineEnd || null,
         }),
       });
+      setShareCommentDraft('');
     } catch (error) {
       console.error('Failed to share draft with helpee:', error);
     }
-  }, [activeHelpAsHelper, helperGuidance, personalCode, storedUserId]);
+  }, [activeHelpAsHelper, helperGuidance, helpVariantGroup, personalCode, shareCommentDraft, storedUserId]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -1473,6 +1847,7 @@ export default function Editor() {
                           avatarSize={18}
                           textSize={13}
                         />
+                        {pendingHelpIds.has(p) && <span className={styles.pendingHelpDot} />}
                         {typingUsers[p] && <span className={styles.typingDot} />}
                       </Tabs.Tab>
                     ))}
@@ -1506,10 +1881,12 @@ export default function Editor() {
                           leftEditorViewRefs.current.team = view;
                           const activeFn = getFunctionAtPosition(view.state.doc.toString(), view.state.selection.main.head);
                           setSelectedTeamFunction(activeFn?.name || '');
+                          openSearchPanel(view);
                         }}
                         extensions={[
                           python(),
                           ...pythonIndent,
+                          ...teamSearchExtensions,
                           yCollab(ytext, undefined),
                           runIconField,
                           sharedRunIconGutter,
@@ -1735,6 +2112,123 @@ export default function Editor() {
                       } : undefined}
                       style={{ height: '100%' }}
                     />
+                    {helpVariantGroup && variantPanelOpen && selectedHelpVariant && (
+                      <div className={styles.variantPanel} style={{ top: helperGuidance && activeHelpAsHelper ? 84 : 8 }}>
+                        <div className={styles.variantHeader}>
+                          <div>
+                            <div className={styles.variantTitle}>
+                              Local variants for {helpVariantGroup.functionName}
+                            </div>
+                            <div className={styles.variantSubtitle}>
+                              Compare versions against {helpVariantGroup.variants[0]?.label || 'v1'} and discuss {helpVariantGroup.concept || 'the fix'}.
+                            </div>
+                          </div>
+                          <Button
+                            size="compact-xs"
+                            variant="subtle"
+                            color="gray"
+                            onClick={() => setVariantPanelOpen(false)}
+                          >
+                            Close
+                          </Button>
+                        </div>
+
+                        <div className={styles.variantChipsRow}>
+                          <span className={styles.variantLabel}>variants</span>
+                          {helpVariantGroup.variants.map((variant) => (
+                            <button
+                              key={variant.variantId}
+                              className={variant.variantId === selectedHelpVariant.variantId ? styles.variantChipActive : styles.variantChip}
+                              onClick={() => setSelectedVariantId(variant.variantId)}
+                            >
+                              {variant.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <pre className={styles.variantPreview}>{selectedHelpVariant.code}</pre>
+
+                        <Group gap="xs" mt={8}>
+                          {!activeHelpAsHelper && (
+                            <Button
+                              size="compact-xs"
+                              color="blue"
+                              variant="light"
+                              onClick={() => applyVariantToEditor(selectedHelpVariant)}
+                            >
+                              Apply to editor
+                            </Button>
+                          )}
+                          <Button
+                            size="compact-xs"
+                            color="gray"
+                            variant="light"
+                            onClick={() => { void createManualVariant(); }}
+                          >
+                            Create local variant
+                          </Button>
+                        </Group>
+
+                        {activeHelpAsHelper && (
+                          <div className={styles.variantComposer}>
+                            <Textarea
+                              size="xs"
+                              minRows={2}
+                              autosize
+                              value={shareCommentDraft}
+                              onChange={(event) => setShareCommentDraft(event.currentTarget.value)}
+                              placeholder="Attach a comment to the next shared variant..."
+                            />
+                          </div>
+                        )}
+
+                        <div className={styles.variantComments}>
+                          <div className={styles.variantCommentsTitle}>Comments</div>
+                          {selectedVariantComments.length === 0 && (
+                            <div className={styles.variantEmptyState}>
+                              No comments yet for {selectedHelpVariant.label}.
+                            </div>
+                          )}
+                          {selectedVariantComments.map((comment) => {
+                            const author = getParticipantProfile(comment.authorId);
+                            return (
+                              <div key={comment.commentId} className={styles.variantCommentItem}>
+                                <ParticipantLabel
+                                  id={comment.authorId}
+                                  name={author.name}
+                                  photo={author.photo}
+                                  avatarSize={18}
+                                  textSize={12}
+                                />
+                                <div className={styles.variantCommentMeta}>
+                                  {comment.concept || helpVariantGroup.concept || 'Peer note'}
+                                  {comment.lineStart ? ` • lines ${comment.lineStart}-${comment.lineEnd || comment.lineStart}` : ''}
+                                </div>
+                                <div className={styles.variantCommentBody}>{comment.body}</div>
+                              </div>
+                            );
+                          })}
+                          <Textarea
+                            size="xs"
+                            minRows={2}
+                            autosize
+                            value={variantCommentDraft}
+                            onChange={(event) => setVariantCommentDraft(event.currentTarget.value)}
+                            placeholder="Add a comment for this variant..."
+                          />
+                          <Group justify="flex-end">
+                            <Button
+                              size="compact-xs"
+                              color="teal"
+                              variant="light"
+                              onClick={() => { void addCommentToVariant(); }}
+                            >
+                              Send comment
+                            </Button>
+                          </Group>
+                        </div>
+                      </div>
+                    )}
                     {assistWidget && (
                       <div className={styles.helperCard} style={{
                         border: assistWidget.status === 'accepted' ? '1px solid #22c55e' : '1px solid #f59e0b',
@@ -1800,6 +2294,36 @@ export default function Editor() {
                         <div style={{ fontSize: 11, color: '#1e3a8a', marginTop: 3 }}>
                           {helperGuidance.focusExplanation || helperGuidance.helperMessage}
                         </div>
+                        {!helpVariantGroup && (
+                          <div style={{ marginTop: 8 }}>
+                            <Textarea
+                              size="xs"
+                              minRows={2}
+                              autosize
+                              value={shareCommentDraft}
+                              onChange={(event) => setShareCommentDraft(event.currentTarget.value)}
+                              placeholder={`Comment for ${activeHelpAsHelper.helpeeName}...`}
+                            />
+                            <Group gap="xs" mt={8}>
+                              <Button
+                                size="compact-xs"
+                                color="gray"
+                                variant="light"
+                                onClick={() => { void createManualVariant(); }}
+                              >
+                                Create local variant
+                              </Button>
+                              <Button
+                                size="compact-xs"
+                                color="teal"
+                                variant="light"
+                                onClick={() => { void shareDraftWithHelpee(); }}
+                              >
+                                Share with {activeHelpAsHelper.helpeeName}
+                              </Button>
+                            </Group>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

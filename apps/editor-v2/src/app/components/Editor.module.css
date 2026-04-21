@@ -181,6 +181,153 @@
   animation: typingPulse 1s infinite;
 }
 
+.pendingHelpDot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #dc2626;
+  margin-left: 8px;
+  box-shadow: 0 0 0 3px rgba(254, 202, 202, 0.9);
+  animation: helpPulse 1s infinite;
+}
+
+.variantPanel {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  z-index: 18;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+  padding: 12px;
+  max-height: 72%;
+  overflow: auto;
+}
+
+.variantHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.variantTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.variantSubtitle {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #475569;
+}
+
+.variantChipsRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.variantLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.variantChip,
+.variantChipActive {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.variantChipActive {
+  background: #0ea5e9;
+  border-color: #0284c7;
+  color: white;
+}
+
+.variantPreview {
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #0f172a;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.variantComposer {
+  margin-top: 10px;
+}
+
+.variantComments {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.variantCommentsTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.variantEmptyState {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.variantCommentItem {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.variantCommentMeta {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0f766e;
+}
+
+.variantCommentBody {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #0f172a;
+  white-space: pre-wrap;
+}
+
+:global(.cm-panels-top) {
+  border-bottom: 1px solid #dbeafe;
+  background: #f8fbff;
+}
+
+:global(.cm-search) {
+  padding: 8px 12px;
+  gap: 8px;
+  align-items: center;
+}
+
+:global(.cm-search button[name="close"]) {
+  display: none;
+}
+
 .remoteCursor {
   position: relative;
   display: inline-block;

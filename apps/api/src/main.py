@@ -236,6 +236,151 @@ def _replace_top_level_function_in_code(original_code: str, function_name: str, 
     return ast.unparse(original_tree)
 
 
+def _compute_changed_line_ranges(base_code: str, next_code: str) -> List[Dict[str, int]]:
+    base_lines = base_code.splitlines()
+    next_lines = next_code.splitlines()
+    matcher = difflib.SequenceMatcher(a=base_lines, b=next_lines)
+    ranges: List[Dict[str, int]] = []
+
+    for tag, _i1, _i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag in ("replace", "insert") and j2 > j1:
+            ranges.append({"start": j1 + 1, "end": j2})
+        elif tag == "delete":
+            fallback_start = min(j1 + 1, len(next_lines)) if next_lines else 1
+            ranges.append({"start": fallback_start, "end": fallback_start})
+
+    if not ranges and next_lines:
+        return [{"start": 1, "end": len(next_lines)}]
+    return ranges
+
+
+def _help_variant_key(helper_id: str, helpee_id: str, function_name: str) -> str:
+    return f"{normalize_participant_id(helper_id)}::{normalize_participant_id(helpee_id)}::{function_name}"
+
+
+def _make_variant_entry(
+    *,
+    group: Dict[str, Any],
+    author_id: str,
+    kind: str,
+    code: str,
+) -> Dict[str, Any]:
+    label = f"v{len(group['variants']) + 1}"
+    variant_id = f"{group['sessionKey']}::{label.lower()}::{int(_time.time() * 1000)}"
+    base_code = group["variants"][0]["code"] if group["variants"] else code
+    return {
+        "variantId": variant_id,
+        "label": label,
+        "authorId": normalize_participant_id(author_id),
+        "kind": kind,
+        "code": code.strip(),
+        "changedLineRanges": [] if kind == "base" else _compute_changed_line_ranges(base_code, code.strip()),
+        "createdAt": int(_time.time()),
+    }
+
+
+def _make_comment_entry(
+    *,
+    author_id: str,
+    variant_id: str,
+    body: str,
+    concept: str,
+    line_start: Optional[int],
+    line_end: Optional[int],
+) -> Dict[str, Any]:
+    return {
+        "commentId": f"{variant_id}::comment::{int(_time.time() * 1000)}",
+        "variantId": variant_id,
+        "authorId": normalize_participant_id(author_id),
+        "body": body.strip(),
+        "concept": concept,
+        "lineStart": line_start,
+        "lineEnd": line_end,
+        "createdAt": int(_time.time()),
+    }
+
+
+def _resolve_help_variant_group(helper_id: str, helpee_id: str, function_name: str) -> Optional[Dict[str, Any]]:
+    key = _help_variant_key(helper_id, helpee_id, function_name)
+    return editor_manager.help_variant_groups.get(key)
+
+
+def _ensure_help_variant_group(
+    *,
+    helper_id: str,
+    helpee_id: str,
+    function_name: str,
+    concept: str,
+    focus_code: str,
+    focus_line_start: int,
+    focus_line_end: int,
+    base_function_code: str,
+    session_key: str,
+) -> Dict[str, Any]:
+    key = _help_variant_key(helper_id, helpee_id, function_name)
+    existing = editor_manager.help_variant_groups.get(key)
+    if existing:
+        return existing
+
+    base_group = {
+        "sessionKey": session_key,
+        "functionName": function_name,
+        "baseVariantId": "",
+        "concept": concept,
+        "focusCode": focus_code,
+        "focusLineStart": focus_line_start,
+        "focusLineEnd": focus_line_end,
+        "variants": [],
+        "comments": [],
+    }
+    base_variant = _make_variant_entry(
+        group=base_group,
+        author_id=helpee_id,
+        kind="base",
+        code=base_function_code,
+    )
+    base_group["variants"].append(base_variant)
+    base_group["baseVariantId"] = base_variant["variantId"]
+    editor_manager.help_variant_groups[key] = base_group
+    return base_group
+
+
+def _serialize_help_variant_group(group: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "sessionKey": group["sessionKey"],
+        "functionName": group["functionName"],
+        "baseVariantId": group["baseVariantId"],
+        "concept": group.get("concept", ""),
+        "focusCode": group.get("focusCode", ""),
+        "focusLineStart": group.get("focusLineStart", 1),
+        "focusLineEnd": group.get("focusLineEnd", 1),
+        "variants": group.get("variants", []),
+        "comments": group.get("comments", []),
+    }
+
+
+async def _broadcast_help_variant_group(group: Dict[str, Any], event_name: str, latest_payload: Dict[str, Any]):
+    state_payload = _serialize_help_variant_group(group)
+    helper_id, helpee_id = group["sessionKey"].split("::", 1)
+    state_event = json.dumps({
+        "event": "helpVariantState",
+        "payload": state_payload,
+    })
+    latest_event = json.dumps({
+        "event": event_name,
+        "payload": {
+            **latest_payload,
+            "group": state_payload,
+        },
+    })
+    await socketManager.direct_message(state_event, helper_id)
+    await socketManager.direct_message(state_event, helpee_id)
+    await socketManager.direct_message(latest_event, helper_id)
+    await socketManager.direct_message(latest_event, helpee_id)
+
+
 def expand_matched_block(lines: List[str], start_idx: int) -> tuple[int, int]:
     line = lines[start_idx]
     base_indent = len(line) - len(line.lstrip())
@@ -499,6 +644,31 @@ class HelpShareBody(BaseModel):
     helpeeId: str
     code: str
     functionName: Optional[str] = None
+    concept: Optional[str] = None
+    comment: Optional[str] = None
+    lineStart: Optional[int] = None
+    lineEnd: Optional[int] = None
+
+
+class HelpManualVariantBody(BaseModel):
+    participantId: str
+    helperId: str
+    helpeeId: str
+    functionName: str
+    code: str
+    concept: Optional[str] = None
+
+
+class HelpCommentBody(BaseModel):
+    authorId: str
+    helperId: str
+    helpeeId: str
+    functionName: str
+    variantId: str
+    body: str
+    concept: Optional[str] = None
+    lineStart: Optional[int] = None
+    lineEnd: Optional[int] = None
 
 class EditorManager:
     def __init__(self):
@@ -509,6 +679,7 @@ class EditorManager:
         self.active_help_sessions: List[Dict] = []  # tracks who is helping whom
         self.pending_help_context: Dict[str, Dict[str, Any]] = {}
         self.active_help_context: Dict[str, Dict[str, Any]] = {}
+        self.help_variant_groups: Dict[str, Dict[str, Any]] = {}
         self.generated_help_drafts: Dict[str, Dict[str, Any]] = {}
         self.participant_concepts: Dict[str, List[str]] = {}  # accumulated concepts per participant
         self.participant_concept_evidence: Dict[str, Dict[str, List[Dict]]] = {}
@@ -2164,6 +2335,10 @@ async def share_help_to_helpee(body: HelpShareBody):
     helpee_id = normalize_participant_id(body.helpeeId)
     shared_code = body.code
     function_name = (body.functionName or "").strip()
+    concept = (body.concept or "").strip()
+    line_start = body.lineStart
+    line_end = body.lineEnd
+    comment = (body.comment or "").strip()
 
     if not helper_id or not helpee_id or not shared_code.strip():
         return {"status": "error", "message": "Missing helperId, helpeeId, or code."}
@@ -2186,33 +2361,158 @@ async def share_help_to_helpee(body: HelpShareBody):
         }
 
     helpee_current_code = editor_manager.individual.get(helpee_id, "")
-    merged_code = _replace_top_level_function_in_code(
-        original_code=helpee_current_code,
-        function_name=resolved_name,
-        replacement_code=resolved_function_code,
+    helpee_function_map = parse_top_level_functions(helpee_current_code)
+    base_function_code = (
+        helpee_function_map.get(resolved_name)
+        or session.get("helpeeFunctionCode", "")
+        or resolved_function_code
     )
-    if merged_code is None:
-        return {
-            "status": "error",
-            "message": f"Unable to merge shared function '{resolved_name}' into helpee editor.",
-        }
+    group = _ensure_help_variant_group(
+        helper_id=helper_id,
+        helpee_id=helpee_id,
+        function_name=resolved_name,
+        concept=concept or session.get("concept", ""),
+        focus_code=session.get("focusCode", ""),
+        focus_line_start=session.get("focusLineStart", 1),
+        focus_line_end=session.get("focusLineEnd", 1),
+        base_function_code=base_function_code,
+        session_key=session_key,
+    )
+    variant = _make_variant_entry(
+        group=group,
+        author_id=helper_id,
+        kind="helper_share",
+        code=resolved_function_code,
+    )
+    group["variants"].append(variant)
 
-    editor_manager.update_individual(helpee_id, merged_code)
-    await socketManager.broadcast(json.dumps({
-        "event": "monitorPlayground",
-        "payload": {"editors": editor_manager.individual},
-    }))
+    if comment:
+        group["comments"].append(_make_comment_entry(
+            author_id=helper_id,
+            variant_id=variant["variantId"],
+            body=comment,
+            concept=concept or group.get("concept", ""),
+            line_start=line_start,
+            line_end=line_end,
+        ))
 
-    await socketManager.broadcast(json.dumps({
+    await _broadcast_help_variant_group(
+        group,
+        "helpVariantShared",
+        {
+            "helperId": helper_id,
+            "helpeeId": helpee_id,
+            "functionName": resolved_name,
+            "variant": variant,
+        },
+    )
+    await socketManager.direct_message(json.dumps({
         "event": "helpDraftShared",
         "payload": {
             "helperId": helper_id,
             "helpeeId": helpee_id,
             "functionName": resolved_name,
-            "code": resolved_function_code,
+            "variantId": variant["variantId"],
         },
-    }))
-    return {"status": "success", "sessionKey": session_key, "functionName": resolved_name}
+    }), helpee_id)
+    return {"status": "success", "sessionKey": session_key, "functionName": resolved_name, "variantId": variant["variantId"]}
+
+
+@app.post("/help/variant/manual")
+async def create_manual_help_variant(body: HelpManualVariantBody):
+    participant_id = normalize_participant_id(body.participantId)
+    helper_id = normalize_participant_id(body.helperId)
+    helpee_id = normalize_participant_id(body.helpeeId)
+    function_name = body.functionName.strip()
+    code = body.code.strip()
+    concept = (body.concept or "").strip()
+
+    if not participant_id or not helper_id or not helpee_id or not function_name or not code:
+        return {"status": "error", "message": "Missing participant, helper, helpee, functionName, or code."}
+
+    session_key = _help_session_key(helper_id, helpee_id)
+    session = editor_manager.active_help_context.get(session_key)
+    if not session:
+        return {"status": "error", "message": "No active help context for this helper/helpee pair."}
+
+    group = _resolve_help_variant_group(helper_id, helpee_id, function_name)
+    if not group:
+        helpee_function_map = parse_top_level_functions(editor_manager.individual.get(helpee_id, ""))
+        base_function_code = (
+            helpee_function_map.get(function_name)
+            or session.get("helpeeFunctionCode", "")
+            or code
+        )
+        group = _ensure_help_variant_group(
+            helper_id=helper_id,
+            helpee_id=helpee_id,
+            function_name=function_name,
+            concept=concept or session.get("concept", ""),
+            focus_code=session.get("focusCode", ""),
+            focus_line_start=session.get("focusLineStart", 1),
+            focus_line_end=session.get("focusLineEnd", 1),
+            base_function_code=base_function_code,
+            session_key=session_key,
+        )
+
+    variant = _make_variant_entry(
+        group=group,
+        author_id=participant_id,
+        kind="manual",
+        code=code,
+    )
+    group["variants"].append(variant)
+    await _broadcast_help_variant_group(
+        group,
+        "helpVariantCreated",
+        {
+            "participantId": participant_id,
+            "helperId": helper_id,
+            "helpeeId": helpee_id,
+            "functionName": function_name,
+            "variant": variant,
+        },
+    )
+    return {"status": "success", "variantId": variant["variantId"]}
+
+
+@app.post("/help/comment")
+async def add_help_variant_comment(body: HelpCommentBody):
+    author_id = normalize_participant_id(body.authorId)
+    helper_id = normalize_participant_id(body.helperId)
+    helpee_id = normalize_participant_id(body.helpeeId)
+    function_name = body.functionName.strip()
+    variant_id = body.variantId.strip()
+    comment_body = body.body.strip()
+
+    if not author_id or not helper_id or not helpee_id or not function_name or not variant_id or not comment_body:
+        return {"status": "error", "message": "Missing author, helper, helpee, function, variant, or comment body."}
+
+    group = _resolve_help_variant_group(helper_id, helpee_id, function_name)
+    if not group:
+        return {"status": "error", "message": "No local variants exist for this function."}
+
+    comment = _make_comment_entry(
+        author_id=author_id,
+        variant_id=variant_id,
+        body=comment_body,
+        concept=(body.concept or group.get("concept", "")).strip(),
+        line_start=body.lineStart,
+        line_end=body.lineEnd,
+    )
+    group["comments"].append(comment)
+    await _broadcast_help_variant_group(
+        group,
+        "helpCommentAdded",
+        {
+            "authorId": author_id,
+            "helperId": helper_id,
+            "helpeeId": helpee_id,
+            "functionName": function_name,
+            "comment": comment,
+        },
+    )
+    return {"status": "success", "commentId": comment["commentId"]}
 
 
 @app.get("/profiles")
@@ -2233,6 +2533,7 @@ async def clear_participants():
         "active_help_sessions": len(editor_manager.active_help_sessions),
         "pending_help_context": len(editor_manager.pending_help_context),
         "active_help_context": len(editor_manager.active_help_context),
+        "help_variant_groups": len(editor_manager.help_variant_groups),
         "generated_help_drafts": len(editor_manager.generated_help_drafts),
         "participant_concepts": len(editor_manager.participant_concepts),
         "participant_concept_evidence": len(editor_manager.participant_concept_evidence),
@@ -2246,6 +2547,7 @@ async def clear_participants():
     editor_manager.active_help_sessions.clear()
     editor_manager.pending_help_context.clear()
     editor_manager.active_help_context.clear()
+    editor_manager.help_variant_groups.clear()
     editor_manager.generated_help_drafts.clear()
     editor_manager.participant_concepts.clear()
     editor_manager.participant_concept_evidence.clear()
