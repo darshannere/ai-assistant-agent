@@ -2600,12 +2600,11 @@ export default function Editor() {
               <Panel defaultSize={50} minSize={25}>
                 <div className={styles.problemPanel}>
                   <div className={styles.problemPanelHeader}>
-                    <Title order={3}>Problem</Title>
+                    <Title order={3}>Problem Description</Title>
                     <Badge variant="light" color="blue" size="sm">Reference</Badge>
                   </div>
 
                   <div className={styles.problemSection}>
-                    <div className={styles.problemSectionLabel}>Title</div>
                     <div className={styles.problemTitle}>Restaurant Order Management System</div>
                   </div>
 
