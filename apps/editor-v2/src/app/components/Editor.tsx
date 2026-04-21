@@ -2592,7 +2592,7 @@ export default function Editor() {
             <div className={styles.Output} id="output">
               <Title order={3}>Output</Title>
               <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
-                {history.map(([timestamp, output, isCollaborative], i) => {
+                {[...history].reverse().map(([timestamp, output, isCollaborative], i) => {
                   const HOURS = timestamp.getHours().toString().padStart(2, '0');
                   const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
                   const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
