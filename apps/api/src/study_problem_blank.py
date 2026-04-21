@@ -15,17 +15,6 @@ def view_menu(menu: Menu):
     pass
 
 
-def create_order(customer: Customer) -> int:
-    """
-    Create a new order to the customer dictionary.
-
-    The order will have a 4-digit unique id, an empty list of items, and a cost of 0.
-
-    Note: Check if the uuid is not already in customer.order, if it is pick a new uuid
-    """
-    pass
-
-
 def clear_order(customer: Customer, order_id: int):
     """
     Clear the order (look up the id) from the customer by removing all items and reset the
@@ -140,18 +129,6 @@ def get_receipt(customer: Customer, menu: Menu):
     """
     pass
 
-
-def add_to_queue(restaurant: Restaurant, customer: Customer):
-    """
-    Add an incoming customer orders (from the customer order dictionary)
-    to the restaurant's order queue.
-
-    Args:
-        customer (Customer): The customer whose order is to be added.
-    """
-    pass
-
-
 def cook_order(restaurant: Restaurant) -> Tuple[str, int]:
     """
     Process the latest order in the queue if there is sufficient inventory.
@@ -177,19 +154,6 @@ def restock_inventory(restaurant: Restaurant, item: str, amount: int):
     Prints:
         "Restocked [item]. New quantity: [quantity]" if the item exists.
         "[item] not found in inventory." if the item is not in the inventory.
-    """
-    pass
-
-
-def cook_time_helper(restaurant: Restaurant, item: str):
-    """
-    Retrieve the cooking time for a specific item.
-
-    Args:
-        item (str): The name of the item.
-
-    Returns:
-        int: The cooking time in minutes for the item or -1 if not found.
     """
     pass
 
