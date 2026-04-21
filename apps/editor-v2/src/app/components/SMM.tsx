@@ -254,18 +254,6 @@ const GraphComponent = ({ onNodeSelect }: GraphComponentProps) => {
         if (onNodeSelect) {
             onNodeSelect(node.id);
         }
-
-        // Send update via WebSocket
-        if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-            const message = {
-                event: "updateNode",
-                payload: { node: node.id, id: storedUserId }
-            };
-            console.log("Sending WebSocket message:", message);
-            ws.current.send(JSON.stringify(message));
-        } else {
-            console.error("WebSocket not open. Cannot send updateNode message.");
-        }
     }, [storedUserId, onNodeSelect]);
 
 

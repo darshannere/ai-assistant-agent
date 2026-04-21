@@ -4,7 +4,7 @@ import { indentOnInput, indentUnit } from '@codemirror/language';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { keymap } from '@codemirror/view';
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
-import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider, Textarea } from "@mantine/core"
+import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider, Textarea, Burger, Select, TextInput } from "@mantine/core"
 import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -203,6 +203,21 @@ type HelpVariantGroup = {
   focusLineEnd: number;
   variants: HelpVariant[];
   comments: HelpComment[];
+};
+type SampleCaseDraft = {
+  functionName: string;
+  label: string;
+  setupCode: string;
+  callExpression: string;
+  trackedExpressionsText: string;
+};
+type SampleRunResult = {
+  status: 'ok' | 'error';
+  functionName: string;
+  consoleOutput: string;
+  actualOutput?: string;
+  trackedValues?: Array<{ expression: string; value: string }>;
+  message?: string;
 };
 
 const userColors = [
@@ -795,6 +810,12 @@ export default function Editor() {
   }>>([]);
   const [teamParticipantStates, setTeamParticipantStates] = useState<Record<string, { status: string; currentTasks: string[]; name: string; photo?: string | null }>>({});
   const [selectedTeamFunction, setSelectedTeamFunction] = useState<string>('');
+  const [graphDrawerOpen, setGraphDrawerOpen] = useState(false);
+  const [samplePanelOpen, setSamplePanelOpen] = useState(false);
+  const [selectedSampleFunction, setSelectedSampleFunction] = useState('');
+  const [sampleDraft, setSampleDraft] = useState<SampleCaseDraft | null>(null);
+  const [sampleRunPending, setSampleRunPending] = useState(false);
+  const [sampleResult, setSampleResult] = useState<SampleRunResult | null>(null);
 
   // Task detail drawer state (LeetCode-style)
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
@@ -920,6 +941,14 @@ export default function Editor() {
   const selectedVariantComments = useMemo(
     () => helpVariantGroup?.comments.filter((comment) => comment.variantId === selectedHelpVariant?.variantId) || [],
     [helpVariantGroup, selectedHelpVariant]
+  );
+  const personalFunctionNames = useMemo(
+    () => getFunctionRanges(personalCode).map((fn) => fn.name),
+    [personalCode]
+  );
+  const sampleFunctionOptions = useMemo(
+    () => personalFunctionNames.map((name) => ({ value: name, label: name })),
+    [personalFunctionNames]
   );
   const taskOwnerByFunction = useMemo(() => {
     const map: Record<string, string> = {};
@@ -1716,7 +1745,122 @@ export default function Editor() {
     setHistory((prev) => [...prev, [new Date(), output, all]]);
   }
 
-  const copyLeftToPersonal = () => {
+  const getFocusedPersonalFunctionName = useCallback(() => {
+    const personalView = personalEditorViewRef.current;
+    const focusedFunction = personalView
+      ? getFunctionAtPosition(personalCode, personalView.state.selection.main.head)
+      : null;
+    return focusedFunction?.name || personalFunctionNames[0] || '';
+  }, [personalCode, personalFunctionNames]);
+
+  const loadSampleCase = useCallback(async (functionName: string) => {
+    if (!functionName) {
+      setSampleDraft(null);
+      setSelectedSampleFunction('');
+      return;
+    }
+    try {
+      const response = await fetch(`${BACKEND_URL}/sampleCase/${functionName}`);
+      const data = await response.json();
+      if (data.status !== 'ok' || !data.sample) {
+        setSampleDraft(null);
+        return;
+      }
+      setSelectedSampleFunction(functionName);
+      setSampleDraft({
+        functionName: data.sample.functionName,
+        label: data.sample.label,
+        setupCode: data.sample.setupCode || '',
+        callExpression: data.sample.callExpression || '',
+        trackedExpressionsText: (data.sample.trackedExpressions || []).join('\n'),
+      });
+      setSampleResult(null);
+    } catch (error) {
+      console.error('Failed to load sample case:', error);
+      setSampleDraft(null);
+    }
+  }, []);
+
+  const toggleSamplePanel = useCallback(() => {
+    setSamplePanelOpen((prev) => {
+      const nextOpen = !prev;
+      if (nextOpen) {
+        const preferredFunction = getFocusedPersonalFunctionName();
+        if (preferredFunction) {
+          void loadSampleCase(preferredFunction);
+        }
+      }
+      return nextOpen;
+    });
+  }, [getFocusedPersonalFunctionName, loadSampleCase]);
+
+  const runSampleCase = useCallback(async () => {
+    if (!sampleDraft) return;
+    const sourceFunction = getFunctionByName(personalCode, sampleDraft.functionName);
+    if (!sourceFunction) {
+      console.warn(`Function '${sampleDraft.functionName}' is not in the personal editor.`);
+      return;
+    }
+
+    setSampleRunPending(true);
+    try {
+      const response = await fetch(`${BACKEND_URL}/runSampleCase`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: sourceFunction.text,
+          channel: storedUserId,
+          functionName: sampleDraft.functionName,
+          setupCode: sampleDraft.setupCode,
+          callExpression: sampleDraft.callExpression,
+          trackedExpressions: sampleDraft.trackedExpressionsText
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean),
+        }),
+      });
+      const data = await response.json();
+      const result: SampleRunResult = {
+        status: data.status === 'ok' ? 'ok' : 'error',
+        functionName: data.functionName || sampleDraft.functionName,
+        consoleOutput: data.consoleOutput || '',
+        actualOutput: data.actualOutput,
+        trackedValues: data.trackedValues || [],
+        message: data.message,
+      };
+      setSampleResult(result);
+
+      const historyLines = [
+        `Example run: ${result.functionName}`,
+        `Console output:\n${result.consoleOutput || '(no console output)'}`,
+      ];
+      if (result.status === 'ok') {
+        historyLines.push(`Return value: ${result.actualOutput ?? 'None'}`);
+        if ((result.trackedValues || []).length > 0) {
+          historyLines.push(
+            `Tracked values:\n${(result.trackedValues || [])
+              .map((item) => `${item.expression} = ${item.value}`)
+              .join('\n')}`
+          );
+        }
+      } else if (result.message) {
+        historyLines.push(`Run error: ${result.message}`);
+      }
+      appendToHistory(historyLines.join('\n\n'), false);
+    } catch (error) {
+      console.error('Failed to run sample case:', error);
+      setSampleResult({
+        status: 'error',
+        functionName: sampleDraft.functionName,
+        consoleOutput: '',
+        message: 'Unable to run the example right now.',
+      });
+    } finally {
+      setSampleRunPending(false);
+    }
+  }, [personalCode, sampleDraft, storedUserId]);
+
+  const copyLeftToPersonal = async () => {
     if (!activeTab) return;
 
     const sourceView = leftEditorViewRefs.current[activeTab];
@@ -1734,9 +1878,31 @@ export default function Editor() {
         console.warn(`Function '${sourceFunction.name}' is currently owned by ${owner}; selection is disabled.`);
         return;
       }
+      try {
+        const response = await fetch(`${BACKEND_URL}/claimFunction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            participantId: storedUserId,
+            functionName: sourceFunction.name,
+          }),
+        });
+        const data = await response.json();
+        if (data.status !== 'ok') {
+          console.warn(data.message || `Unable to claim '${sourceFunction.name}'.`);
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to claim function:', error);
+        return;
+      }
     }
 
     setPersonalCode((prev) => {
+      const existingFunction = getFunctionByName(prev, sourceFunction.name);
+      if (existingFunction) {
+        return replaceFunctionInCode(prev, sourceFunction.name, sourceFunction.text);
+      }
       const trimmedPrev = prev.trimEnd();
       const separator = trimmedPrev.length > 0 ? '\n\n' : '';
       return `${trimmedPrev}${separator}${sourceFunction.text}\n`;
@@ -1745,20 +1911,21 @@ export default function Editor() {
 
   const copyPersonalToTeam = () => {
     const personalView = personalEditorViewRef.current;
-    const teamView = teamEditorViewRef.current;
     const currentTeamCode = ytext.toString();
-    if (!personalView || !teamView) return;
+    if (!personalView) return;
 
     const sourceFunction = getFunctionAtPosition(personalCode, personalView.state.selection.main.head);
-    const targetFunction = getFunctionAtPosition(currentTeamCode, teamView.state.selection.main.head);
+    const targetFunction = sourceFunction
+      ? getFunctionByName(currentTeamCode, sourceFunction.name)
+      : null;
 
     if (!sourceFunction || !targetFunction) {
       console.warn('Unable to find both source and target functions for copy-to-team.');
       return;
     }
-    const targetOwner = taskOwnerByFunction[targetFunction.name];
+    const targetOwner = taskOwnerByFunction[sourceFunction.name];
     if (targetOwner && targetOwner !== storedUserId) {
-      console.warn(`Cannot overwrite '${targetFunction.name}' because ${targetOwner} is currently working on it.`);
+      console.warn(`Cannot overwrite '${sourceFunction.name}' because ${targetOwner} is currently working on it.`);
       return;
     }
 
@@ -2031,7 +2198,7 @@ export default function Editor() {
                   <span style={{ fontSize: 10, fontWeight: 600, color: '#888', userSelect: 'none' }}>Copy</span>
                   <button
                     title={activeTab === 'team' ? "Copy Team Editor to My Editor" : `Copy ${activeTab}'s Editor to My Editor`}
-                    onClick={(e) => { e.stopPropagation(); copyLeftToPersonal(); }}
+                    onClick={(e) => { e.stopPropagation(); void copyLeftToPersonal(); }}
                     className={styles.copyArrowBtn}
                   >
                     &rarr;
@@ -2109,10 +2276,143 @@ export default function Editor() {
                         </Button>
                       )}
                       <Button onClick={testCodePlayground} size='compact-xs'>Test</Button>
+                      <Button
+                        onClick={toggleSamplePanel}
+                        size='compact-xs'
+                        variant='light'
+                        disabled={personalFunctionNames.length === 0}
+                      >
+                        Try Example
+                      </Button>
                       {/* <Button onClick={runPersonalCode} size='compact-xs'>Run</Button> */}
                       <Button onClick={clearCode} size='compact-xs'>Clear Console</Button>
                     </Group>
                   </Group>
+                  {samplePanelOpen && (
+                    <div className={styles.samplePanel}>
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <div>
+                          <div className={styles.samplePanelTitle}>Try Example</div>
+                          <div className={styles.samplePanelSubtitle}>
+                            Edit the setup, run the function, and inspect console output plus live values.
+                          </div>
+                        </div>
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          color="gray"
+                          onClick={() => setSamplePanelOpen(false)}
+                        >
+                          Close
+                        </Button>
+                      </Group>
+                      <div className={styles.sampleFields}>
+                        <Select
+                          label="Function"
+                          data={sampleFunctionOptions}
+                          value={selectedSampleFunction}
+                          placeholder="Select a function"
+                          onChange={(value) => {
+                            if (!value) return;
+                            void loadSampleCase(value);
+                          }}
+                          searchable={false}
+                        />
+                        <TextInput
+                          label="Call"
+                          value={sampleDraft?.callExpression || ''}
+                          onChange={(event) => setSampleDraft((prev) => prev ? {
+                            ...prev,
+                            callExpression: event.currentTarget.value,
+                          } : prev)}
+                        />
+                        <Textarea
+                          label="Setup"
+                          minRows={5}
+                          autosize
+                          value={sampleDraft?.setupCode || ''}
+                          onChange={(event) => setSampleDraft((prev) => prev ? {
+                            ...prev,
+                            setupCode: event.currentTarget.value,
+                          } : prev)}
+                        />
+                        <Textarea
+                          label="Watch values"
+                          description="One expression per line"
+                          minRows={3}
+                          autosize
+                          value={sampleDraft?.trackedExpressionsText || ''}
+                          onChange={(event) => setSampleDraft((prev) => prev ? {
+                            ...prev,
+                            trackedExpressionsText: event.currentTarget.value,
+                          } : prev)}
+                        />
+                      </div>
+                      <Group gap="xs" mt="sm">
+                        <Button
+                          size="compact-xs"
+                          onClick={() => { void runSampleCase(); }}
+                          loading={sampleRunPending}
+                          disabled={!sampleDraft}
+                        >
+                          Run Example
+                        </Button>
+                        <Button
+                          size="compact-xs"
+                          variant="light"
+                          color="gray"
+                          disabled={!selectedSampleFunction}
+                          onClick={() => {
+                            if (selectedSampleFunction) {
+                              void loadSampleCase(selectedSampleFunction);
+                            }
+                          }}
+                        >
+                          Reset
+                        </Button>
+                        {sampleDraft?.label && (
+                          <Badge variant="light" color="blue">{sampleDraft.label}</Badge>
+                        )}
+                      </Group>
+                      {sampleResult && (
+                        <div className={styles.sampleResult}>
+                          <div className={styles.sampleResultSection}>
+                            <strong>Console output</strong>
+                            <Code block className={styles.sampleCodeBlock}>
+                              {sampleResult.consoleOutput || '(no console output)'}
+                            </Code>
+                          </div>
+                          {sampleResult.status === 'ok' ? (
+                            <>
+                              <div className={styles.sampleResultSection}>
+                                <strong>Return value</strong>
+                                <Code block className={styles.sampleCodeBlock}>
+                                  {sampleResult.actualOutput ?? 'None'}
+                                </Code>
+                              </div>
+                              <div className={styles.sampleResultSection}>
+                                <strong>Tracked values</strong>
+                                <Code block className={styles.sampleCodeBlock}>
+                                  {(sampleResult.trackedValues || []).length > 0
+                                    ? (sampleResult.trackedValues || [])
+                                      .map((item) => `${item.expression} = ${item.value}`)
+                                      .join('\n')
+                                    : '(no tracked values)'}
+                                </Code>
+                              </div>
+                            </>
+                          ) : (
+                            <div className={styles.sampleResultSection}>
+                              <strong>Run error</strong>
+                              <Code block className={styles.sampleCodeBlock}>
+                                {sampleResult.message || 'The example could not be run.'}
+                              </Code>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
                     <CodeMirror
                       height="100%"
@@ -2352,46 +2652,60 @@ export default function Editor() {
 
           <PanelResizeHandle />
 
-          {/* Bottom: Graph + Output */}
+          {/* Bottom: Output */}
           <Panel defaultSize={45} minSize={20}>
-            <PanelGroup direction="horizontal">
-              <Panel defaultSize={50}>
-                <div style={{ padding: '10px', height: '100%', boxSizing: 'border-box' }}>
-                  <ReactFlowProvider>
-                    <GraphComponent onNodeSelect={handleNodeSelect} />
-                  </ReactFlowProvider>
-                </div>
-              </Panel>
-              <PanelResizeHandle />
-              <Panel defaultSize={50}>
-                <div className={styles.Output} id="output">
-                  <Title order={3}>Output</Title>
-                  <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
-                    {history.map(([timestamp, output, isCollaborative], i) => {
-                      const HOURS = timestamp.getHours().toString().padStart(2, '0');
-                      const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
-                      const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
-                      return (
-                        <div key={i}>
-                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
-                            <div style={{ whiteSpace: 'pre-wrap' }}>
-                              <ReactAnsi logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }} log={output} />
-                            </div>
-                            <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
-                          </div>
-                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`} style={{ color: 'yellow' }}>
-                            <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
-                          </div>
+            <div className={styles.Output} id="output">
+              <Group justify="space-between" align="center" mb="xs">
+                <Title order={3}>Output</Title>
+                <Group gap="xs" align="center">
+                  <Text size="sm" c="dimmed">Graph Status</Text>
+                  <Burger
+                    opened={graphDrawerOpen}
+                    onClick={() => setGraphDrawerOpen((prev) => !prev)}
+                    size="sm"
+                    aria-label="Toggle graph status"
+                  />
+                </Group>
+              </Group>
+              <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
+                {history.map(([timestamp, output, isCollaborative], i) => {
+                  const HOURS = timestamp.getHours().toString().padStart(2, '0');
+                  const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
+                  const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
+                  return (
+                    <div key={i}>
+                      <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
+                        <div style={{ whiteSpace: 'pre-wrap' }}>
+                          <ReactAnsi logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }} log={output} />
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </Panel>
-            </PanelGroup>
+                        <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
+                      </div>
+                      <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`} style={{ color: 'yellow' }}>
+                        <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </Panel>
         </PanelGroup>
       </Container>
+
+      <Drawer
+        opened={graphDrawerOpen}
+        onClose={() => setGraphDrawerOpen(false)}
+        position="right"
+        size="lg"
+        title="Graph Status"
+        overlayProps={{ backgroundOpacity: 0.1 }}
+      >
+        <div style={{ height: '75vh' }}>
+          <ReactFlowProvider>
+            <GraphComponent onNodeSelect={handleNodeSelect} />
+          </ReactFlowProvider>
+        </div>
+      </Drawer>
 
       {/* LeetCode-style Task Detail Drawer */}
       <Drawer

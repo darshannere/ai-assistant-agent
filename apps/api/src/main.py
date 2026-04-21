@@ -14,6 +14,7 @@ import sys
 import io
 import ast
 import inspect
+import importlib
 import difflib
 from textwrap import dedent
 import csv
@@ -21,11 +22,13 @@ from pathlib import Path
 from collections import ChainMap, defaultdict
 import json
 import study_problem_sol
+import study_problem_tester
 from datetime import datetime, timedelta
 import time as _time
 from openai import OpenAI
 from concept_reference_map import CONCEPT_REFERENCE_TEMPLATES
 from dotenv import load_dotenv
+from study_problem_classes import Menu, Order, Customer, Restaurant
 app = FastAPI()
 
 load_dotenv()
@@ -42,6 +45,20 @@ app.add_middleware(
 class InputBody(BaseModel):
     code: str
     channel: str
+
+
+class ClaimFunctionBody(BaseModel):
+    participantId: str
+    functionName: str
+
+
+class SampleRunBody(BaseModel):
+    code: str
+    channel: str
+    functionName: str
+    setupCode: str
+    callExpression: str
+    trackedExpressions: List[str] = []
 
 
 class NotifyBody(BaseModel):
@@ -591,6 +608,35 @@ class GraphManager:
         if node_id in self.graph:
             self.graph[node_id].update_status(id)
 
+    def claim_function(self, node_id: str, participant_id: str) -> bool:
+        clean_id = normalize_participant_id(participant_id)
+        node = self.graph.get(node_id)
+        if not node:
+            return False
+        if node.work_status == 2:
+            return normalize_participant_id(node.claimed_by) == clean_id
+        if node.claimed_by and normalize_participant_id(node.claimed_by) != clean_id:
+            return False
+
+        for other_node in self.graph.values():
+            if (
+                other_node.name != node_id
+                and other_node.work_status == 1
+                and normalize_participant_id(other_node.claimed_by) == clean_id
+            ):
+                other_node.claimed_by = ""
+                other_node.work_status = 0
+                other_node.start_time = None
+
+        if node.work_status == 1 and normalize_participant_id(node.claimed_by) == clean_id:
+            return True
+
+        node.claimed_by = clean_id
+        node.work_status = 1
+        node.start_time = datetime.now()
+        editor_manager.profiles[clean_id] = node_id
+        return True
+
     async def update_completed(self, node_id: str, completed: int, remaining: int):
         await self.graph[node_id].update_completed(completed, remaining)
         work_statuses = [
@@ -627,6 +673,54 @@ class GraphManager:
                 if node.work_status == 2:
                     user_summary[user]["completed"] += node.completed
         return user_summary
+
+
+def build_graph_event() -> dict:
+    work_statuses = [
+        {node_name: graph_manager.graph[node_name].work_status}
+        for node_name in graph_manager.graph
+    ]
+    return {
+        "event": "updateGraph",
+        "payload": {
+            "graph": dict(ChainMap(*work_statuses)),
+            "participantStates": get_participant_states(),
+        },
+    }
+
+
+async def broadcast_graph_event():
+    await socketManager.broadcast(json.dumps(build_graph_event()))
+
+
+async def _auto_sync_completed_function(participant_id: str, function_name: str, function_code: str) -> bool:
+    global state
+    clean_id = normalize_participant_id(participant_id)
+    node = graph_manager.graph.get(function_name)
+    if not node:
+        return False
+    if node.work_status != 2 or normalize_participant_id(node.claimed_by) != clean_id:
+        return False
+
+    current_doc = editor_manager.master or state
+    if not current_doc.strip():
+        return False
+
+    next_doc = _replace_top_level_function_in_code(current_doc, function_name, function_code)
+    if not next_doc or next_doc == current_doc:
+        return False
+
+    state = next_doc
+    editor_manager.update_master(next_doc, clean_id)
+    await socketManager.broadcast(json.dumps({
+        "event": "document_update",
+        "payload": {
+            "doc": state,
+            "user": clean_id,
+            "cursors": cursor_positions,
+        },
+    }))
+    return True
 
 class PredictionResponse(BaseModel):
     prediction: int
@@ -1495,6 +1589,11 @@ async def testFunction(rawCode: InputBody):
             rawCode.code,
             source="test",
         )
+        await _auto_sync_completed_function(
+            rawCode.channel,
+            replacer.function_name,
+            rawCode.code,
+        )
         replacer.restore_main_file()
 
     sys.stdout = sys.__stdout__
@@ -1512,20 +1611,94 @@ async def testFunction(rawCode: InputBody):
         await socketManager.direct_message(json.dumps(event), rawCode.channel)
 
     # Re-broadcast graph state after test (ensures nodes update in real-time)
-    work_statuses = [
-        {node: graph_manager.graph[node].work_status}
-        for node in graph_manager.graph
-    ]
-    graph_event = {
-        "event": "updateGraph",
-        "payload": {
-            "graph": dict(ChainMap(*work_statuses)),
-            "participantStates": get_participant_states(),
-        },
-    }
-    await socketManager.broadcast(json.dumps(graph_event))
+    await broadcast_graph_event()
 
     return Response(content=buffer.getvalue(), media_type="text/plain")
+
+
+@app.get("/sampleCase/{function_name}")
+def get_sample_case_config(function_name: str):
+    if function_name not in FUNCTION_SIGNATURES:
+        return {"status": "not_found"}
+    return {
+        "status": "ok",
+        "sample": get_sample_case(function_name),
+    }
+
+
+@app.post("/claimFunction")
+async def claim_function(body: ClaimFunctionBody):
+    participant_id = normalize_participant_id(body.participantId)
+    function_name = body.functionName.strip()
+    claimed = graph_manager.claim_function(function_name, participant_id)
+    if not claimed:
+        return {"status": "error", "message": "That function is unavailable."}
+    await broadcast_graph_event()
+    return {"status": "ok", "functionName": function_name, "participantId": participant_id}
+
+
+@app.post("/runSampleCase")
+async def run_sample_case(body: SampleRunBody):
+    replacer = FunctionReplacer("study_problem_tester.py", "study_problem_sol.py")
+    buffer = io.StringIO()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    try:
+        replacer.replace_function_in_file(body.code)
+        function_name = body.functionName.strip() or replacer.function_name
+        if not replacer.function_name:
+            return {
+                "status": "error",
+                "message": "No valid function definition was found in the editor.",
+            }
+
+        testfile = importlib.reload(study_problem_tester)
+        scope = {
+            "__builtins__": __builtins__,
+            "Menu": Menu,
+            "Order": Order,
+            "Customer": Customer,
+            "Restaurant": Restaurant,
+            "random": __import__("random"),
+            "testfile": testfile,
+            "study_problem_tester": testfile,
+        }
+
+        exec(body.setupCode or "", scope)
+
+        sys.stdout = buffer
+        sys.stderr = buffer
+        actual_output = eval(body.callExpression, scope)
+        scope["result"] = actual_output
+        tracked_values = []
+        for expression in body.trackedExpressions:
+            expr = expression.strip()
+            if not expr:
+                continue
+            tracked_values.append({
+                "expression": expr,
+                "value": _repr_value(eval(expr, scope)),
+            })
+    except Exception as exc:
+        return {
+            "status": "error",
+            "functionName": body.functionName.strip() or replacer.function_name,
+            "consoleOutput": buffer.getvalue(),
+            "message": str(exc),
+        }
+    finally:
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
+        replacer.restore_main_file()
+
+    return {
+        "status": "ok",
+        "functionName": function_name,
+        "consoleOutput": buffer.getvalue(),
+        "actualOutput": _repr_value(actual_output),
+        "trackedValues": tracked_values,
+    }
 
 
 @app.post("/test")
@@ -1755,6 +1928,188 @@ FUNCTION_SIGNATURES = {
     "inventory_helper": "inventory_helper(restaurant, item)",
     "average_cook_time": "average_cook_time(restaurant)",
 }
+
+
+SAMPLE_CASES = {
+    "view_menu": {
+        "label": "Preview a regular menu",
+        "setupCode": "menu = Menu()",
+        "callExpression": "testfile.view_menu(menu)",
+        "trackedExpressions": [],
+    },
+    "create_order": {
+        "label": "Create a new order id",
+        "setupCode": (
+            "customer = Customer('amy')\n"
+            "customer.order[1234] = Order(1234)\n"
+            "testfile.random.randint = lambda _a, _b: 5678"
+        ),
+        "callExpression": "testfile.create_order(customer)",
+        "trackedExpressions": [
+            "list(customer.order.keys())",
+            "customer.order[5678].items",
+            "customer.order[5678].cost",
+        ],
+    },
+    "clear_order": {
+        "label": "Clear an existing order",
+        "setupCode": (
+            "customer = Customer('amy')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 17.0)"
+        ),
+        "callExpression": "testfile.clear_order(customer, 1234)",
+        "trackedExpressions": [
+            "customer.order[1234].items",
+            "customer.order[1234].cost",
+        ],
+    },
+    "view_order_summary": {
+        "label": "Print a short order summary",
+        "setupCode": (
+            "menu = Menu()\n"
+            "order = Order('Bobby', ['chicken', 'vegetables'], 21)"
+        ),
+        "callExpression": "testfile.view_order_summary(order, menu)",
+        "trackedExpressions": [],
+    },
+    "add_to_order": {
+        "label": "Add one valid menu item",
+        "setupCode": (
+            "customer = Customer('amy')\n"
+            "customer.order[1234] = Order(1234)\n"
+            "menu = Menu()"
+        ),
+        "callExpression": "testfile.add_to_order(customer, 1234, menu, 'chicken')",
+        "trackedExpressions": [
+            "customer.order[1234].items",
+            "customer.order[1234].cost",
+        ],
+    },
+    "remove_from_order": {
+        "label": "Remove an ordered item",
+        "setupCode": (
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "menu = Menu()"
+        ),
+        "callExpression": "testfile.remove_from_order(customer, 1234, menu, 'chicken')",
+        "trackedExpressions": [
+            "customer.order[1234].items",
+            "customer.order[1234].cost",
+        ],
+    },
+    "calculate_order_cost": {
+        "label": "Calculate a two-item total",
+        "setupCode": (
+            "menu = Menu()\n"
+            "order = Order(1234, ['chicken', 'rice'], 0)"
+        ),
+        "callExpression": "testfile.calculate_order_cost(order, menu)",
+        "trackedExpressions": [],
+    },
+    "get_receipt": {
+        "label": "Print a receipt for two orders",
+        "setupCode": (
+            "menu = Menu()\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)"
+        ),
+        "callExpression": "testfile.get_receipt(customer, menu)",
+        "trackedExpressions": [],
+    },
+    "add_to_queue": {
+        "label": "Queue a customer's orders",
+        "setupCode": (
+            "restaurant = Restaurant()\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)"
+        ),
+        "callExpression": "testfile.add_to_queue(restaurant, customer)",
+        "trackedExpressions": [
+            "[order.id for order in restaurant.order_queue]",
+        ],
+    },
+    "cook_order": {
+        "label": "Cook the first queued order",
+        "setupCode": (
+            "restaurant = Restaurant()\n"
+            "restaurant.cook_time_in_minutes = {'chicken': 3, 'rice': 2, 'vegetables': 1}\n"
+            "restaurant.inventory = {'chicken': 1, 'rice': 1, 'vegetables': 1}\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)\n"
+            "testfile.add_to_queue(restaurant, customer)"
+        ),
+        "callExpression": "testfile.cook_order(restaurant)",
+        "trackedExpressions": [
+            "[order.id for order in restaurant.order_queue]",
+            "restaurant.inventory",
+        ],
+    },
+    "restock_inventory": {
+        "label": "Restock a known item",
+        "setupCode": (
+            "restaurant = Restaurant()\n"
+            "restaurant.inventory = {'chicken': 1, 'rice': 1, 'vegetables': 1}"
+        ),
+        "callExpression": "testfile.restock_inventory(restaurant, 'chicken', 2)",
+        "trackedExpressions": [
+            "restaurant.inventory['chicken']",
+        ],
+    },
+    "cook_time_helper": {
+        "label": "Look up one cook time",
+        "setupCode": (
+            "restaurant = Restaurant()\n"
+            "restaurant.cook_time_in_minutes = {'chicken': 3, 'rice': 2, 'vegetables': 1}"
+        ),
+        "callExpression": "testfile.cook_time_helper(restaurant, 'chicken')",
+        "trackedExpressions": [],
+    },
+    "inventory_helper": {
+        "label": "Use one inventory item",
+        "setupCode": (
+            "restaurant = Restaurant()\n"
+            "restaurant.inventory = {'chicken': 1, 'rice': 1, 'vegetables': 1}"
+        ),
+        "callExpression": "testfile.inventory_helper(restaurant, 'rice')",
+        "trackedExpressions": [
+            "restaurant.inventory['rice']",
+        ],
+    },
+    "average_cook_time": {
+        "label": "Average a populated queue",
+        "setupCode": (
+            "restaurant = Restaurant()\n"
+            "restaurant.cook_time_in_minutes = {'chicken': 3, 'rice': 2, 'vegetables': 1}\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)\n"
+            "testfile.add_to_queue(restaurant, customer)"
+        ),
+        "callExpression": "testfile.average_cook_time(restaurant)",
+        "trackedExpressions": [
+            "[order.id for order in restaurant.order_queue]",
+        ],
+    },
+}
+
+
+def get_sample_case(function_name: str) -> dict:
+    sample = SAMPLE_CASES.get(function_name, {})
+    return {
+        "functionName": function_name,
+        "label": sample.get("label", "Try this function with editable input"),
+        "setupCode": sample.get("setupCode", ""),
+        "callExpression": sample.get("callExpression", f"testfile.{function_name}()"),
+        "trackedExpressions": sample.get("trackedExpressions", []),
+    }
+
+
+def _repr_value(value: Any) -> str:
+    return repr(value)
 
 
 @app.get("/task/{node}")

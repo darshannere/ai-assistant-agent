@@ -47,6 +47,49 @@
   padding: 10px;
 }
 
+.samplePanel {
+  border-bottom: 1px solid #d9e2ec;
+  background: #f8fbff;
+  padding: 12px;
+  flex-shrink: 0;
+}
+
+.samplePanelTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.samplePanelSubtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.sampleFields {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.sampleResult {
+  margin-top: 12px;
+  border-top: 1px solid #dbeafe;
+  padding-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.sampleResultSection {
+  display: grid;
+  gap: 6px;
+}
+
+.sampleCodeBlock {
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
 /* --- Helpee-side banners --- */
 .helpSessionBanner {
   background: #dcfce7;
