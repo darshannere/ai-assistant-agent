@@ -1205,6 +1205,13 @@ class FunctionReplacer:
         return "\n".join(results)
 
     async def run_tests(self, user):
+        summary = {
+            "functionName": self.function_name,
+            "passed": 0,
+            "selected": 0,
+            "fullyPassed": False,
+            "alreadyComplete": False,
+        }
         try:
             test_cases = ""
             if not self.test_full:
@@ -1213,7 +1220,11 @@ class FunctionReplacer:
 
             if graph_manager.graph[self.function_name].work_status == 2:
                 print(f"{self.function_name} Already complete")
-                return
+                summary["alreadyComplete"] = True
+                summary["fullyPassed"] = True
+                summary["passed"] = graph_manager.graph[self.function_name].completed
+                summary["selected"] = graph_manager.graph[self.function_name].total
+                return summary
 
             result = subprocess.run(
                 [
@@ -1273,6 +1284,9 @@ class FunctionReplacer:
                     completed=pass_final,
                     remaining=total_selected,
                 )
+                summary["passed"] = pass_final
+                summary["selected"] = total_selected
+                summary["fullyPassed"] = total_selected > 0 and pass_final == total_selected
                 print(
                     f"Completed {pass_final} out of {total_selected} tests for {self.function_name}"
 
@@ -1282,6 +1296,7 @@ class FunctionReplacer:
             # print(result.stderr)
         except Exception as e:
             print("Error running tests:", e)
+        return summary
 
     def restore_main_file(self):
         with open(self.main_copy_file, "r") as src, open(self.main_file, "w") as dest:
@@ -1573,23 +1588,31 @@ async def testFunction(rawCode: InputBody):
     buffer = io.StringIO()
     sys.stdout = buffer
     sys.stderr = buffer
+    test_summary = {
+        "functionName": "",
+        "passed": 0,
+        "selected": 0,
+        "fullyPassed": False,
+        "alreadyComplete": False,
+    }
+    auto_synced = False
     if rawCode.channel == "all":
         replacer = FunctionReplacer("study_problem_tester.py", "study_problem_sol.py")
         replacer.replace_whole_file(rawCode.code)
-        await replacer.run_tests(rawCode.channel)
+        test_summary = await replacer.run_tests(rawCode.channel)
         replacer.restore_main_file()
 
     else:
         replacer = FunctionReplacer("study_problem_tester.py", "study_problem_sol.py")
         replacer.replace_function_in_file(rawCode.code)
-        await replacer.run_tests(rawCode.channel)
+        test_summary = await replacer.run_tests(rawCode.channel)
         editor_manager.refresh_concept_evidence(
             rawCode.channel,
             replacer.function_name,
             rawCode.code,
             source="test",
         )
-        await _auto_sync_completed_function(
+        auto_synced = await _auto_sync_completed_function(
             rawCode.channel,
             replacer.function_name,
             rawCode.code,
@@ -1613,7 +1636,17 @@ async def testFunction(rawCode: InputBody):
     # Re-broadcast graph state after test (ensures nodes update in real-time)
     await broadcast_graph_event()
 
-    return Response(content=buffer.getvalue(), media_type="text/plain")
+    return {
+        "status": "ok",
+        "stdout": buffer.getvalue(),
+        "all": rawCode.channel == "all",
+        "functionName": replacer.function_name if rawCode.channel != "all" else test_summary.get("functionName", ""),
+        "passed": test_summary.get("passed", 0),
+        "selected": test_summary.get("selected", 0),
+        "fullyPassed": test_summary.get("fullyPassed", False),
+        "alreadyComplete": test_summary.get("alreadyComplete", False),
+        "autoSynced": auto_synced,
+    }
 
 
 @app.get("/sampleCase/{function_name}")

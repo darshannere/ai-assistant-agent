@@ -210,6 +210,17 @@ type SampleCaseDraft = {
   callExpression: string;
   trackedExpressions: string[];
 };
+type TestFunctionResponse = {
+  status: string;
+  stdout: string;
+  all: boolean;
+  functionName: string;
+  passed: number;
+  selected: number;
+  fullyPassed: boolean;
+  alreadyComplete: boolean;
+  autoSynced: boolean;
+};
 
 const userColors = [
   { color: '#30bced', light: '#30bced33' },
@@ -950,6 +961,10 @@ export default function Editor() {
     });
     return map;
   }, [teamParticipantStates]);
+  const claimedFunctionName = useMemo(
+    () => teamParticipantStates[storedUserId]?.currentTasks?.[0] || '',
+    [storedUserId, teamParticipantStates]
+  );
 
   useEffect(() => {
     pendingSuggestionRef.current = pendingSuggestion;
@@ -1050,6 +1065,84 @@ export default function Editor() {
     return participantProfiles[participantId] || { name: participantId, photo: null };
   }, [participantProfiles]);
 
+  const syncTeamEditorToBackend = useCallback((doc: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const teamView = teamEditorViewRef.current;
+    const selection = teamView && teamView.hasFocus && teamView.dom.ownerDocument.hasFocus()
+      ? teamView.state.selection.main
+      : null;
+
+    ws.send(JSON.stringify({
+      event: 'updateMaster',
+      payload: {
+        cursor: selection ? {
+          anchor: selection.anchor,
+          head: selection.head,
+        } : null,
+        doc,
+        name: storedUserId,
+        timeStamp: new Date().getTime(),
+      },
+    }));
+  }, [storedUserId]);
+
+  const applyOptimisticClaim = useCallback((functionName: string) => {
+    if (!functionName) return;
+    setTeamParticipantStates((prev) => {
+      const next: Record<string, { status: string; currentTasks: string[]; name: string; photo?: string | null; concepts?: string[] }> = {};
+
+      Object.entries(prev).forEach(([pid, state]) => {
+        const nextTasks = pid === storedUserId
+          ? [functionName]
+          : (state.currentTasks || []).filter((taskName) => taskName !== functionName);
+        next[pid] = {
+          ...state,
+          currentTasks: nextTasks,
+          status: nextTasks.length > 0 ? 'unavailable' : 'available',
+        };
+      });
+
+      const ownProfile = participantProfilesRef.current[storedUserId] || { name: storedUserId, photo: null };
+      const existingSelf = next[storedUserId];
+      next[storedUserId] = {
+        status: 'unavailable',
+        currentTasks: [functionName],
+        name: existingSelf?.name || ownProfile.name || storedUserId,
+        photo: existingSelf?.photo ?? ownProfile.photo ?? null,
+        concepts: existingSelf?.concepts || prev[storedUserId]?.concepts || [],
+      };
+
+      return next;
+    });
+    setSelectedTeamFunction(functionName);
+  }, [storedUserId]);
+
+  const copyFunctionToTeamByName = useCallback((functionName: string) => {
+    if (!functionName) return false;
+
+    const currentTeamCode = ytext.toString();
+    const sourceFunction = getFunctionByName(personalCode, functionName);
+    const targetFunction = getFunctionByName(currentTeamCode, functionName);
+
+    if (!sourceFunction || !targetFunction) {
+      console.warn(`Unable to find '${functionName}' in both editors for copy-to-team.`);
+      return false;
+    }
+
+    const targetOwner = taskOwnerByFunction[functionName];
+    if (targetOwner && targetOwner !== storedUserId) {
+      console.warn(`Cannot overwrite '${functionName}' because ${targetOwner} is currently working on it.`);
+      return false;
+    }
+
+    ytext.delete(targetFunction.from, targetFunction.to - targetFunction.from);
+    ytext.insert(targetFunction.from, `${sourceFunction.text}\n\n`);
+    syncTeamEditorToBackend(ytext.toString());
+    return true;
+  }, [personalCode, storedUserId, syncTeamEditorToBackend, taskOwnerByFunction]);
+
   const remoteCursorExtension = useMemo(
     () => createRemoteCursorExtension(remoteTeamCursors),
     [remoteTeamCursors]
@@ -1123,12 +1216,21 @@ export default function Editor() {
 
   const testSingleFunction = useCallback(async (functionCode: string) => {
     const channel = storedUserId;
-    await fetch(`${BACKEND_URL}/testFunction`, {
+    const response = await fetch(`${BACKEND_URL}/testFunction`, {
       method: 'POST',
       headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: functionCode, channel }),
     });
-  }, [storedUserId]);
+    const data = await response.json() as TestFunctionResponse;
+    const functionName = data.functionName || getFunctionRanges(functionCode)[0]?.name || '';
+    const ownsFunction = functionName && taskOwnerByFunction[functionName] === storedUserId;
+
+    if (data.fullyPassed && functionName && (ownsFunction || claimedFunctionName === functionName) && !data.autoSynced) {
+      copyFunctionToTeamByName(functionName);
+    }
+
+    return data;
+  }, [claimedFunctionName, copyFunctionToTeamByName, storedUserId, taskOwnerByFunction]);
 
   const personalRunIconGutter = useMemo(
     () => createRunIconGutter((functionCode) => {
@@ -1189,29 +1291,6 @@ export default function Editor() {
         ws.send(JSON.stringify({ event: 'stoppedTyping', payload: { id: storedUserId } }));
       }
     }, 2000);
-  }, [storedUserId]);
-
-  const syncTeamEditorToBackend = useCallback((doc: string) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    const teamView = teamEditorViewRef.current;
-    const selection = teamView && teamView.hasFocus && teamView.dom.ownerDocument.hasFocus()
-      ? teamView.state.selection.main
-      : null;
-
-    ws.send(JSON.stringify({
-      event: 'updateMaster',
-      payload: {
-        cursor: selection ? {
-          anchor: selection.anchor,
-          head: selection.head,
-        } : null,
-        doc,
-        name: storedUserId,
-        timeStamp: new Date().getTime(),
-      },
-    }));
   }, [storedUserId]);
 
   const showSuggestionInline = useCallback((suggestion: NonNullable<typeof pendingSuggestion>) => {
@@ -1872,6 +1951,7 @@ export default function Editor() {
           console.warn(data.message || `Unable to claim '${sourceFunction.name}'.`);
           return;
         }
+        applyOptimisticClaim(sourceFunction.name);
       } catch (error) {
         console.error('Failed to claim function:', error);
         return;
@@ -1891,27 +1971,17 @@ export default function Editor() {
 
   const copyPersonalToTeam = () => {
     const personalView = personalEditorViewRef.current;
-    const currentTeamCode = ytext.toString();
-    if (!personalView) return;
-
-    const sourceFunction = getFunctionAtPosition(personalCode, personalView.state.selection.main.head);
-    const targetFunction = sourceFunction
-      ? getFunctionByName(currentTeamCode, sourceFunction.name)
+    const focusedFunction = personalView
+      ? getFunctionAtPosition(personalCode, personalView.state.selection.main.head)
       : null;
+    const functionName = focusedFunction?.name || claimedFunctionName;
 
-    if (!sourceFunction || !targetFunction) {
-      console.warn('Unable to find both source and target functions for copy-to-team.');
-      return;
-    }
-    const targetOwner = taskOwnerByFunction[sourceFunction.name];
-    if (targetOwner && targetOwner !== storedUserId) {
-      console.warn(`Cannot overwrite '${sourceFunction.name}' because ${targetOwner} is currently working on it.`);
+    if (!functionName) {
+      console.warn('Unable to determine which function to copy back.');
       return;
     }
 
-    ytext.delete(targetFunction.from, targetFunction.to - targetFunction.from);
-    ytext.insert(targetFunction.from, `${sourceFunction.text}\n\n`);
-    syncTeamEditorToBackend(ytext.toString());
+    copyFunctionToTeamByName(functionName);
   };
 
   const shareDraftWithHelpee = useCallback(async () => {
