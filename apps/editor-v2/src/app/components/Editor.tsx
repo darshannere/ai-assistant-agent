@@ -1885,6 +1885,8 @@ export default function Editor() {
                         }}
                         extensions={[
                           python(),
+                          EditorState.readOnly.of(true),
+                          EditorView.editable.of(false),
                           ...pythonIndent,
                           ...teamSearchExtensions,
                           yCollab(ytext, undefined),
