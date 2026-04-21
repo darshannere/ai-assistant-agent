@@ -1700,14 +1700,6 @@ export default function Editor() {
                       )}
                     </Group>
                     <Group gap="xs">
-                      <Button
-                        onClick={() => requestPeerAssist('button')}
-                        size='compact-xs'
-                        color='red'
-                        variant='light'
-                      >
-                        Request Help
-                      </Button>
                       {activeHelpAsHelper && (
                         <Button
                           onClick={() => { void shareDraftWithHelpee(); }}
