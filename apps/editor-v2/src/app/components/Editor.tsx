@@ -2312,9 +2312,6 @@ export default function Editor() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8' }}>
                           Peer-assist draft for {activeHelpAsHelper.helpeeName} ({helperGuidance.concept || 'focused fix'})
                         </div>
-                        <div style={{ fontSize: 11, color: '#1e3a8a', marginTop: 3 }}>
-                          {helperGuidance.focusExplanation || helperGuidance.helperMessage}
-                        </div>
                         {!helpVariantGroup && (
                           <div style={{ marginTop: 8 }}>
                             <Textarea

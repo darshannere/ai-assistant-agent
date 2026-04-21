@@ -2,40 +2,6 @@ import random
 from typing import List, Tuple, Optional
 from study_problem_classes import Menu, Order, Customer, Restaurant
 
-"""
-study_problem_classes
-
-class Menu:
-    def __init__(self):
-        self.dishes = {"chicken": 12.00, "pork": 10.00, "vegetables": 9.00, "rice": 12.00}
-
-
-class Order:
-    def __init__(self, uuid=0, items=None, cost=0):
-        self.id = uuid
-        self.items: List[str] = items if items is not None else []
-        self.cost = cost
-
-
-class Customer:
-    def __init__(self, name):
-        self.name = name
-        self.order: Dict[int, Order] = {}
-
-
-class Restaurant:
-    def __init__(self):
-        self.inventory = {"chicken": 4, "pork": 3, "vegetables": 12, "rice": 7}
-        self.cook_time_in_minutes = {
-            "chicken": 15,
-            "pork": 12,
-            "vegetables": 10,
-            "rice": 30,
-        }
-        self.order_queue: List[Order] = []
-"""
-
-
 def view_menu(menu: Menu):
     """
     Display the menu items with their cost in the following format:
@@ -253,28 +219,3 @@ def average_cook_time(restaurant: Restaurant):
         "No orders in queue." if the queue is empty.
     """
     pass
-
-
-restaurant = Restaurant()
-customer = Customer("Alice")
-menu = Menu()
-
-
-def run():
-    view_menu(menu)
-    id = create_order(customer)
-    add_to_order(customer, id, menu, "chicken")
-    add_to_order(customer, id, menu, "beef")
-    add_to_order(customer, id, menu, "vegetables")
-
-    remove_from_order(customer, id, menu, "vegetables")
-    remove_from_order(customer, id, menu, "beef")
-
-    get_receipt(customer, menu)
-
-    add_to_queue(restaurant, customer)
-    (id, time) = cook_order(restaurant)
-    print(id, time)
-
-
-run()
