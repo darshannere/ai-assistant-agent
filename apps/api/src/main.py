@@ -1936,6 +1936,9 @@ SAMPLE_CASES = {
         "setupCode": "menu = Menu()",
         "callExpression": "testfile.view_menu(menu)",
         "trackedExpressions": [],
+        "exampleInput": "menu = Menu()\nview_menu(menu)",
+        "exampleOutput": "None",
+        "examplePrint": "item | cost\nchicken | 12.0\npork | 10.0\nvegetables | 9.0\nrice | 12.0",
     },
     "create_order": {
         "label": "Create a new order id",
@@ -1950,6 +1953,13 @@ SAMPLE_CASES = {
             "customer.order[5678].items",
             "customer.order[5678].cost",
         ],
+        "exampleInput": (
+            "customer = Customer('amy')\n"
+            "customer.order[1234] = Order(1234)\n"
+            "create_order(customer)"
+        ),
+        "exampleOutput": "5678",
+        "examplePrint": "None",
     },
     "clear_order": {
         "label": "Clear an existing order",
@@ -1962,6 +1972,13 @@ SAMPLE_CASES = {
             "customer.order[1234].items",
             "customer.order[1234].cost",
         ],
+        "exampleInput": (
+            "customer = Customer('amy')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 17.0)\n"
+            "clear_order(customer, 1234)"
+        ),
+        "exampleOutput": "None",
+        "examplePrint": "Order cleared.",
     },
     "view_order_summary": {
         "label": "Print a short order summary",
@@ -1971,6 +1988,13 @@ SAMPLE_CASES = {
         ),
         "callExpression": "testfile.view_order_summary(order, menu)",
         "trackedExpressions": [],
+        "exampleInput": (
+            "menu = Menu()\n"
+            "order = Order('Bobby', ['chicken', 'vegetables'], 21)\n"
+            "view_order_summary(order, menu)"
+        ),
+        "exampleOutput": "None",
+        "examplePrint": "Order Summary:\nchicken - $12.00\nvegetables - $9.00\nTotal: $21.00",
     },
     "add_to_order": {
         "label": "Add one valid menu item",
@@ -1984,6 +2008,14 @@ SAMPLE_CASES = {
             "customer.order[1234].items",
             "customer.order[1234].cost",
         ],
+        "exampleInput": (
+            "customer = Customer('amy')\n"
+            "customer.order[1234] = Order(1234)\n"
+            "menu = Menu()\n"
+            "add_to_order(customer, 1234, menu, 'chicken')"
+        ),
+        "exampleOutput": "'chicken'",
+        "examplePrint": "Added chicken: 12.0",
     },
     "remove_from_order": {
         "label": "Remove an ordered item",
@@ -1997,6 +2029,14 @@ SAMPLE_CASES = {
             "customer.order[1234].items",
             "customer.order[1234].cost",
         ],
+        "exampleInput": (
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "menu = Menu()\n"
+            "remove_from_order(customer, 1234, menu, 'chicken')"
+        ),
+        "exampleOutput": "True",
+        "examplePrint": "Removed chicken",
     },
     "calculate_order_cost": {
         "label": "Calculate a two-item total",
@@ -2006,6 +2046,13 @@ SAMPLE_CASES = {
         ),
         "callExpression": "testfile.calculate_order_cost(order, menu)",
         "trackedExpressions": [],
+        "exampleInput": (
+            "menu = Menu()\n"
+            "order = Order(1234, ['chicken', 'rice'], 0)\n"
+            "calculate_order_cost(order, menu)"
+        ),
+        "exampleOutput": "24.0",
+        "examplePrint": "None",
     },
     "get_receipt": {
         "label": "Print a receipt for two orders",
@@ -2017,6 +2064,18 @@ SAMPLE_CASES = {
         ),
         "callExpression": "testfile.get_receipt(customer, menu)",
         "trackedExpressions": [],
+        "exampleInput": (
+            "menu = Menu()\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)\n"
+            "get_receipt(customer, menu)"
+        ),
+        "exampleOutput": "None",
+        "examplePrint": (
+            "bob\n-----\n1234\nOrder Summary:\nchicken - $12.00\nrice - $12.00\n"
+            "Total: $24.00\n-----\n5678\nOrder Summary:\nrice - $12.00\nTotal: $12.00\n-----\n$36.00"
+        ),
     },
     "add_to_queue": {
         "label": "Queue a customer's orders",
@@ -2030,6 +2089,15 @@ SAMPLE_CASES = {
         "trackedExpressions": [
             "[order.id for order in restaurant.order_queue]",
         ],
+        "exampleInput": (
+            "restaurant = Restaurant()\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)\n"
+            "add_to_queue(restaurant, customer)"
+        ),
+        "exampleOutput": "None",
+        "examplePrint": "None",
     },
     "cook_order": {
         "label": "Cook the first queued order",
@@ -2047,6 +2115,18 @@ SAMPLE_CASES = {
             "[order.id for order in restaurant.order_queue]",
             "restaurant.inventory",
         ],
+        "exampleInput": (
+            "restaurant = Restaurant()\n"
+            "restaurant.cook_time_in_minutes = {'chicken': 3, 'rice': 2, 'vegetables': 1}\n"
+            "restaurant.inventory = {'chicken': 1, 'rice': 1, 'vegetables': 1}\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)\n"
+            "add_to_queue(restaurant, customer)\n"
+            "cook_order(restaurant)"
+        ),
+        "exampleOutput": "(5678, 2)",
+        "examplePrint": "None",
     },
     "restock_inventory": {
         "label": "Restock a known item",
@@ -2058,6 +2138,13 @@ SAMPLE_CASES = {
         "trackedExpressions": [
             "restaurant.inventory['chicken']",
         ],
+        "exampleInput": (
+            "restaurant = Restaurant()\n"
+            "restaurant.inventory = {'chicken': 1, 'rice': 1, 'vegetables': 1}\n"
+            "restock_inventory(restaurant, 'chicken', 2)"
+        ),
+        "exampleOutput": "None",
+        "examplePrint": "Restocked chicken. New quantity: 3",
     },
     "cook_time_helper": {
         "label": "Look up one cook time",
@@ -2067,6 +2154,13 @@ SAMPLE_CASES = {
         ),
         "callExpression": "testfile.cook_time_helper(restaurant, 'chicken')",
         "trackedExpressions": [],
+        "exampleInput": (
+            "restaurant = Restaurant()\n"
+            "restaurant.cook_time_in_minutes = {'chicken': 3, 'rice': 2, 'vegetables': 1}\n"
+            "cook_time_helper(restaurant, 'chicken')"
+        ),
+        "exampleOutput": "3",
+        "examplePrint": "None",
     },
     "inventory_helper": {
         "label": "Use one inventory item",
@@ -2078,6 +2172,13 @@ SAMPLE_CASES = {
         "trackedExpressions": [
             "restaurant.inventory['rice']",
         ],
+        "exampleInput": (
+            "restaurant = Restaurant()\n"
+            "restaurant.inventory = {'chicken': 1, 'rice': 1, 'vegetables': 1}\n"
+            "inventory_helper(restaurant, 'rice')"
+        ),
+        "exampleOutput": "True",
+        "examplePrint": "None",
     },
     "average_cook_time": {
         "label": "Average a populated queue",
@@ -2093,6 +2194,17 @@ SAMPLE_CASES = {
         "trackedExpressions": [
             "[order.id for order in restaurant.order_queue]",
         ],
+        "exampleInput": (
+            "restaurant = Restaurant()\n"
+            "restaurant.cook_time_in_minutes = {'chicken': 3, 'rice': 2, 'vegetables': 1}\n"
+            "customer = Customer('bob')\n"
+            "customer.order[1234] = Order(1234, ['chicken', 'rice'], 24.0)\n"
+            "customer.order[5678] = Order(5678, ['rice'], 12.0)\n"
+            "add_to_queue(restaurant, customer)\n"
+            "average_cook_time(restaurant)"
+        ),
+        "exampleOutput": "3.5",
+        "examplePrint": "Average cooking time: 3.50 minutes.",
     },
 }
 
@@ -2105,11 +2217,63 @@ def get_sample_case(function_name: str) -> dict:
         "setupCode": sample.get("setupCode", ""),
         "callExpression": sample.get("callExpression", f"testfile.{function_name}()"),
         "trackedExpressions": sample.get("trackedExpressions", []),
+        "exampleInput": sample.get("exampleInput", ""),
+        "exampleOutput": sample.get("exampleOutput", ""),
+        "examplePrint": sample.get("examplePrint", "None"),
     }
 
 
 def _repr_value(value: Any) -> str:
     return repr(value)
+
+
+def _get_signature_params(function_name: str) -> List[str]:
+    signature = FUNCTION_SIGNATURES.get(function_name, "")
+    if "(" not in signature or ")" not in signature:
+        return []
+    params = signature.split("(", 1)[1].rsplit(")", 1)[0]
+    return [param.strip() for param in params.split(",") if param.strip()]
+
+
+def _indent_block(text: str, indent: str = "        ") -> str:
+    lines = text.splitlines() or [text]
+    return "\n".join(f"{indent}{line}" if line else indent.rstrip() for line in lines)
+
+
+def build_starter_code(function_name: str, graph_node: GraphNode) -> str:
+    signature = FUNCTION_SIGNATURES.get(function_name, f"{function_name}()")
+    sample = get_sample_case(function_name)
+    example_input = sample.get("exampleInput", graph_node.example_input or signature)
+    example_output = sample.get("exampleOutput", graph_node.example_output or "None")
+    example_print = sample.get("examplePrint", "None")
+    params = _get_signature_params(function_name)
+
+    doc_lines = [
+        '    """',
+        f"    {graph_node.desc}",
+    ]
+
+    if params:
+        doc_lines.extend([
+            "",
+            "    Args:",
+            *[f"        {param}" for param in params],
+        ])
+
+    doc_lines.extend([
+        "",
+        "    Example Input:",
+        _indent_block(example_input),
+        "",
+        "    Example Output:",
+        _indent_block(example_output),
+        "",
+        "    Example Print:",
+        _indent_block(example_print),
+        '    """',
+        "    pass",
+    ])
+    return f"def {signature}:\n" + "\n".join(doc_lines) + "\n"
 
 
 @app.get("/task/{node}")
@@ -2118,15 +2282,16 @@ def get_task_details(node):
     if node not in graph_manager.graph:
         return {"status": "not_found"}
     g = graph_manager.graph[node]
-    signature = FUNCTION_SIGNATURES.get(node, f"{node}()")
-    starter = f'def {signature}:\n    """\n    {g.desc}\n    """\n    pass\n'
+    sample = get_sample_case(node)
+    starter = build_starter_code(node, g)
     return {
         "status": "ok",
         "name": node,
         "description": g.desc,
         "concepts": g.concepts,
-        "example_input": g.example_input,
-        "example_output": g.example_output,
+        "example_input": sample.get("exampleInput", g.example_input),
+        "example_output": sample.get("exampleOutput", g.example_output),
+        "example_print": sample.get("examplePrint", "None"),
         "starter_code": starter,
     }
 

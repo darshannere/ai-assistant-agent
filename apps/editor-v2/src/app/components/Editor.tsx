@@ -4,7 +4,7 @@ import { indentOnInput, indentUnit } from '@codemirror/language';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { keymap } from '@codemirror/view';
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels"
-import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider, Textarea, Burger, Select, TextInput } from "@mantine/core"
+import { Button, Title, Container, Group, Tabs, Badge, Drawer, Text, Code, Divider, Textarea, Select } from "@mantine/core"
 import styles from "./Editor.module.css"
 import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
@@ -206,18 +206,9 @@ type HelpVariantGroup = {
 };
 type SampleCaseDraft = {
   functionName: string;
-  label: string;
   setupCode: string;
   callExpression: string;
-  trackedExpressionsText: string;
-};
-type SampleRunResult = {
-  status: 'ok' | 'error';
-  functionName: string;
-  consoleOutput: string;
-  actualOutput?: string;
-  trackedValues?: Array<{ expression: string; value: string }>;
-  message?: string;
+  trackedExpressions: string[];
 };
 
 const userColors = [
@@ -815,13 +806,12 @@ export default function Editor() {
   const [selectedSampleFunction, setSelectedSampleFunction] = useState('');
   const [sampleDraft, setSampleDraft] = useState<SampleCaseDraft | null>(null);
   const [sampleRunPending, setSampleRunPending] = useState(false);
-  const [sampleResult, setSampleResult] = useState<SampleRunResult | null>(null);
 
   // Task detail drawer state (LeetCode-style)
   const [taskDrawerOpen, setTaskDrawerOpen] = useState(false);
   const [selectedTask, setSelectedTask] = useState<{
     name: string; description: string; concepts: string;
-    example_input: string; example_output: string; starter_code: string;
+    example_input: string; example_output: string; example_print: string; starter_code: string;
   } | null>(null);
 
   const handleNodeSelect = useCallback(async (nodeId: string) => {
@@ -1105,6 +1095,12 @@ export default function Editor() {
     return () => {
       if (idleSuggestionTimerRef.current) clearTimeout(idleSuggestionTimerRef.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setGraphDrawerOpen((prev) => !prev);
+    window.addEventListener('canary-toggle-graph-drawer', handler);
+    return () => window.removeEventListener('canary-toggle-graph-drawer', handler);
   }, []);
 
   useEffect(() => {
@@ -1769,12 +1765,10 @@ export default function Editor() {
       setSelectedSampleFunction(functionName);
       setSampleDraft({
         functionName: data.sample.functionName,
-        label: data.sample.label,
         setupCode: data.sample.setupCode || '',
         callExpression: data.sample.callExpression || '',
-        trackedExpressionsText: (data.sample.trackedExpressions || []).join('\n'),
+        trackedExpressions: data.sample.trackedExpressions || [],
       });
-      setSampleResult(null);
     } catch (error) {
       console.error('Failed to load sample case:', error);
       setSampleDraft(null);
@@ -1813,48 +1807,33 @@ export default function Editor() {
           functionName: sampleDraft.functionName,
           setupCode: sampleDraft.setupCode,
           callExpression: sampleDraft.callExpression,
-          trackedExpressions: sampleDraft.trackedExpressionsText
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean),
+          trackedExpressions: sampleDraft.trackedExpressions,
         }),
       });
       const data = await response.json();
-      const result: SampleRunResult = {
-        status: data.status === 'ok' ? 'ok' : 'error',
-        functionName: data.functionName || sampleDraft.functionName,
-        consoleOutput: data.consoleOutput || '',
-        actualOutput: data.actualOutput,
-        trackedValues: data.trackedValues || [],
-        message: data.message,
-      };
-      setSampleResult(result);
-
       const historyLines = [
-        `Example run: ${result.functionName}`,
-        `Console output:\n${result.consoleOutput || '(no console output)'}`,
+        `Example run: ${data.functionName || sampleDraft.functionName}`,
+        `Print:\n${data.consoleOutput || '(no print output)'}`,
       ];
-      if (result.status === 'ok') {
-        historyLines.push(`Return value: ${result.actualOutput ?? 'None'}`);
-        if ((result.trackedValues || []).length > 0) {
+      if (data.status === 'ok') {
+        historyLines.push(`Output:\n${data.actualOutput ?? 'None'}`);
+        if ((data.trackedValues || []).length > 0) {
           historyLines.push(
-            `Tracked values:\n${(result.trackedValues || [])
+            `State:\n${(data.trackedValues || [])
               .map((item) => `${item.expression} = ${item.value}`)
               .join('\n')}`
           );
         }
-      } else if (result.message) {
-        historyLines.push(`Run error: ${result.message}`);
+      } else if (data.message) {
+        historyLines.push(`Run error:\n${data.message}`);
       }
       appendToHistory(historyLines.join('\n\n'), false);
     } catch (error) {
       console.error('Failed to run sample case:', error);
-      setSampleResult({
-        status: 'error',
-        functionName: sampleDraft.functionName,
-        consoleOutput: '',
-        message: 'Unable to run the example right now.',
-      });
+      appendToHistory(
+        `Example run: ${sampleDraft.functionName}\n\nRun error:\nUnable to run the example right now.`,
+        false,
+      );
     } finally {
       setSampleRunPending(false);
     }
@@ -2294,7 +2273,7 @@ export default function Editor() {
                         <div>
                           <div className={styles.samplePanelTitle}>Try Example</div>
                           <div className={styles.samplePanelSubtitle}>
-                            Edit the setup, run the function, and inspect console output plus live values.
+                            Pick a function and edit the inputs.
                           </div>
                         </div>
                         <Button
@@ -2318,33 +2297,14 @@ export default function Editor() {
                           }}
                           searchable={false}
                         />
-                        <TextInput
-                          label="Call"
-                          value={sampleDraft?.callExpression || ''}
-                          onChange={(event) => setSampleDraft((prev) => prev ? {
-                            ...prev,
-                            callExpression: event.currentTarget.value,
-                          } : prev)}
-                        />
                         <Textarea
-                          label="Setup"
-                          minRows={5}
+                          label="Inputs"
+                          minRows={6}
                           autosize
                           value={sampleDraft?.setupCode || ''}
                           onChange={(event) => setSampleDraft((prev) => prev ? {
                             ...prev,
                             setupCode: event.currentTarget.value,
-                          } : prev)}
-                        />
-                        <Textarea
-                          label="Watch values"
-                          description="One expression per line"
-                          minRows={3}
-                          autosize
-                          value={sampleDraft?.trackedExpressionsText || ''}
-                          onChange={(event) => setSampleDraft((prev) => prev ? {
-                            ...prev,
-                            trackedExpressionsText: event.currentTarget.value,
                           } : prev)}
                         />
                       </div>
@@ -2370,47 +2330,7 @@ export default function Editor() {
                         >
                           Reset
                         </Button>
-                        {sampleDraft?.label && (
-                          <Badge variant="light" color="blue">{sampleDraft.label}</Badge>
-                        )}
                       </Group>
-                      {sampleResult && (
-                        <div className={styles.sampleResult}>
-                          <div className={styles.sampleResultSection}>
-                            <strong>Console output</strong>
-                            <Code block className={styles.sampleCodeBlock}>
-                              {sampleResult.consoleOutput || '(no console output)'}
-                            </Code>
-                          </div>
-                          {sampleResult.status === 'ok' ? (
-                            <>
-                              <div className={styles.sampleResultSection}>
-                                <strong>Return value</strong>
-                                <Code block className={styles.sampleCodeBlock}>
-                                  {sampleResult.actualOutput ?? 'None'}
-                                </Code>
-                              </div>
-                              <div className={styles.sampleResultSection}>
-                                <strong>Tracked values</strong>
-                                <Code block className={styles.sampleCodeBlock}>
-                                  {(sampleResult.trackedValues || []).length > 0
-                                    ? (sampleResult.trackedValues || [])
-                                      .map((item) => `${item.expression} = ${item.value}`)
-                                      .join('\n')
-                                    : '(no tracked values)'}
-                                </Code>
-                              </div>
-                            </>
-                          ) : (
-                            <div className={styles.sampleResultSection}>
-                              <strong>Run error</strong>
-                              <Code block className={styles.sampleCodeBlock}>
-                                {sampleResult.message || 'The example could not be run.'}
-                              </Code>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   )}
                   <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
@@ -2655,18 +2575,7 @@ export default function Editor() {
           {/* Bottom: Output */}
           <Panel defaultSize={45} minSize={20}>
             <div className={styles.Output} id="output">
-              <Group justify="space-between" align="center" mb="xs">
-                <Title order={3}>Output</Title>
-                <Group gap="xs" align="center">
-                  <Text size="sm" c="dimmed">Graph Status</Text>
-                  <Burger
-                    opened={graphDrawerOpen}
-                    onClick={() => setGraphDrawerOpen((prev) => !prev)}
-                    size="sm"
-                    aria-label="Toggle graph status"
-                  />
-                </Group>
-              </Group>
+              <Title order={3}>Output</Title>
               <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
                 {history.map(([timestamp, output, isCollaborative], i) => {
                   const HOURS = timestamp.getHours().toString().padStart(2, '0');
@@ -2742,6 +2651,11 @@ export default function Editor() {
             <Text size="sm" fw={600} c="dimmed" mb={4}>Example Output</Text>
             <Code block style={{ fontSize: 13, marginBottom: 16 }}>
               {selectedTask.example_output}
+            </Code>
+
+            <Text size="sm" fw={600} c="dimmed" mb={4}>Example Print</Text>
+            <Code block style={{ fontSize: 13, marginBottom: 16 }}>
+              {selectedTask.example_print}
             </Code>
 
             <Divider my="sm" />

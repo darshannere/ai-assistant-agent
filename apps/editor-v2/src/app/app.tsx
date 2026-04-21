@@ -21,6 +21,7 @@ export function App() {
 
   const [profile, setProfile] = useState<any>(null);
   const [helpDrawerOpen, setHelpDrawerOpen] = useState(false);
+  const [graphMenuOpen, setGraphMenuOpen] = useState(false);
   const [helpQueueCount, setHelpQueueCount] = useState(0);
   const [availableHelpers, setAvailableHelpers] = useState<Array<{
     helperId?: string; helperName: string; helperPhoto?: string | null; concepts?: string[];
@@ -101,6 +102,7 @@ export function App() {
 
   // Only show profile on editor/draw pages, not on home
   const showProfile = location.pathname !== '/';
+  const showGraphToggle = location.pathname === '/editor';
 
   return (
     <div>
@@ -111,9 +113,19 @@ export function App() {
       >
         <AppShell.Header>
           <Group h="100%" px="md">
-            <Burger opened={opened} onClick={toggle} hiddenFrom="sm" size="sm" />
             <Group justify="space-between" style={{ flex: 1 }}>
               <div className={styles.brandTitleWrap}>
+                {showGraphToggle && (
+                  <Burger
+                    opened={graphMenuOpen}
+                    onClick={() => {
+                      setGraphMenuOpen((prev) => !prev);
+                      window.dispatchEvent(new CustomEvent('canary-toggle-graph-drawer'));
+                    }}
+                    size="sm"
+                    aria-label="Toggle graph status"
+                  />
+                )}
                 <span className={styles.brandIcon} aria-hidden="true">&#x1F424;</span>
                 <Title order={2} className={styles.brandTitle}>Canary</Title>
               </div>
