@@ -43,11 +43,12 @@
 }
 
 .Output {
-  background: #f2f4f7;
-  padding: 10px 12px;
+  background-color: lightgrey;
+  padding: 10px;
   height: 100%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .outputHeader {
@@ -55,9 +56,49 @@
 }
 
 .outputScroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  max-height: 350px;
   margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.outputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.outputLine {
+  background: rgba(255, 255, 255, 0.78);
+  border-radius: 6px;
+  padding: 8px 10px;
+  border: 1px solid #dbeafe;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.outputTimestamp {
+  margin: 0;
+  font-size: 12px;
+  color: #334155;
+  align-self: flex-end;
+}
+
+.outputLog {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.outputSourceLine {
+  color: yellow;
+  padding: 0 2px 8px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .problemPanel {

@@ -2711,14 +2711,17 @@ export default function Editor() {
                       const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
                       const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
                       return (
-                        <div key={i}>
-                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
-                            <div style={{ whiteSpace: 'pre-wrap' }}>
-                              <ReactAnsi logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }} log={output} />
+                        <div key={i} className={styles.outputGroup}>
+                          <div className={styles.outputLine}>
+                            <div className={styles.outputLog}>
+                              <ReactAnsi
+                                logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }}
+                                log={output}
+                              />
                             </div>
-                            <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
+                            <p className={styles.outputTimestamp}>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
                           </div>
-                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`} style={{ color: 'yellow' }}>
+                          <div className={styles.outputSourceLine}>
                             <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
                           </div>
                         </div>
