@@ -2594,31 +2594,71 @@ export default function Editor() {
 
           <PanelResizeHandle />
 
-          {/* Bottom: Output */}
+          {/* Bottom: Problem brief + Output */}
           <Panel defaultSize={45} minSize={20}>
-            <div className={styles.Output} id="output">
-              <Title order={3}>Output</Title>
-              <div style={{ overflowY: 'auto', maxHeight: '350px' }}>
-                {[...history].reverse().map(([timestamp, output, isCollaborative], i) => {
-                  const HOURS = timestamp.getHours().toString().padStart(2, '0');
-                  const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
-                  const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
-                  return (
-                    <div key={i}>
-                      <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
-                        <div style={{ whiteSpace: 'pre-wrap' }}>
-                          <ReactAnsi logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }} log={output} />
-                        </div>
-                        <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
-                      </div>
-                      <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`} style={{ color: 'yellow' }}>
-                        <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
-                      </div>
+            <PanelGroup direction="horizontal">
+              <Panel defaultSize={50} minSize={25}>
+                <div className={styles.problemPanel}>
+                  <div className={styles.problemPanelHeader}>
+                    <Title order={3}>Problem</Title>
+                    <Badge variant="light" color="blue" size="sm">Reference</Badge>
+                  </div>
+
+                  <div className={styles.problemSection}>
+                    <div className={styles.problemSectionLabel}>Title</div>
+                    <div className={styles.problemTitle}>Restaurant Order Management System</div>
+                  </div>
+
+                  <div className={styles.problemSection}>
+                    <div className={styles.problemSectionLabel}>Classes</div>
+                    <div className={styles.problemClassList}>
+                      {RESTAURANT_CLASS_SNIPPETS.map((classSnippet) => (
+                        <pre key={classSnippet} className={styles.problemCodeBlock}>
+                          {classSnippet}
+                        </pre>
+                      ))}
                     </div>
-                  );
-                })}
-              </div>
-            </div>
+                  </div>
+
+                  <div className={styles.problemSection}>
+                    <div className={styles.problemSectionLabel}>Problem Description</div>
+                    <Text size="sm" className={styles.problemDescription}>
+                      {RESTAURANT_PROBLEM_DESCRIPTION}
+                    </Text>
+                  </div>
+                </div>
+              </Panel>
+
+              <PanelResizeHandle className={styles.bottomPanelHandle} />
+
+              <Panel defaultSize={50} minSize={25}>
+                <div className={styles.Output} id="output">
+                  <div className={styles.outputHeader}>
+                    <Title order={3}>Output</Title>
+                  </div>
+                  <div className={styles.outputScroll}>
+                    {[...history].reverse().map(([timestamp, output, isCollaborative], i) => {
+                      const HOURS = timestamp.getHours().toString().padStart(2, '0');
+                      const MINUTES = timestamp.getMinutes().toString().padStart(2, '0');
+                      const SECONDS = timestamp.getSeconds().toString().padStart(2, '0');
+                      return (
+                        <div key={i}>
+                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`}>
+                            <div style={{ whiteSpace: 'pre-wrap' }}>
+                              <ReactAnsi logStyle={{ backgroundColor: 'white', color: 'black', fontSize: '10px' }} log={output} />
+                            </div>
+                            <p>{`${HOURS}:${MINUTES}:${SECONDS}`}</p>
+                          </div>
+                          <div className={`outputLine ${i % 2 === 1 ? 'active' : ''}`} style={{ color: 'yellow' }}>
+                            <i>{isCollaborative ? 'Ran by Collaborative Editor' : 'Ran from Personal Playground'}</i>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </Panel>
+            </PanelGroup>
           </Panel>
         </PanelGroup>
       </Container>
@@ -2714,3 +2754,36 @@ const pythonIndent: Extension[] = [
 // Y.js Collaboration Extension
 const ydoc = new Y.Doc();
 const ytext = ydoc.getText('codemirror');
+
+const RESTAURANT_PROBLEM_DESCRIPTION = [
+  "Build the core functions for a small restaurant order management system.",
+  "The goal is to update orders, calculate totals, manage inventory, and print summaries in the exact format expected by the tests.",
+  "Each function works with the provided Menu, Order, Customer, and Restaurant classes instead of inventing new data structures.",
+  "Some functions return values, while others mainly communicate through printed output, so both behavior and formatting matter.",
+  "Think of the task as implementing the helper operations that let orders move from creation to receipt and then through the kitchen queue.",
+].join(" ");
+
+const RESTAURANT_CLASS_SNIPPETS = [
+  `class Menu:
+    def __init__(self):
+        self.dishes = {"chicken": 12.00, "pork": 10.00, "vegetables": 9.00, "rice": 12.00}`,
+  `class Order:
+    def __init__(self, uuid=0, items=None, cost=0):
+        self.id = uuid
+        self.items: List[str] = items if items is not None else []
+        self.cost = cost`,
+  `class Customer:
+    def __init__(self, name):
+        self.name = name
+        self.order: Dict[int, Order] = {}`,
+  `class Restaurant:
+    def __init__(self):
+        self.inventory = {"chicken": 4, "pork": 3, "vegetables": 12, "rice": 7}
+        self.cook_time_in_minutes = {
+            "chicken": 15,
+            "pork": 12,
+            "vegetables": 10,
+            "rice": 30,
+        }
+        self.order_queue: List[Order] = []`,
+];

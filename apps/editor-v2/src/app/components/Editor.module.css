@@ -43,8 +43,90 @@
 }
 
 .Output {
-  background-color: lightgrey;
-  padding: 10px;
+  background: #f2f4f7;
+  padding: 10px 12px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.outputHeader {
+  flex-shrink: 0;
+}
+
+.outputScroll {
+  overflow-y: auto;
+  max-height: 350px;
+  margin-top: 8px;
+}
+
+.problemPanel {
+  height: 100%;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 34%),
+    linear-gradient(180deg, #f8fbff 0%, #eef4ff 100%);
+  border-right: 1px solid #d8e3f5;
+}
+
+.problemPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.problemSection {
+  margin-top: 14px;
+}
+
+.problemSectionLabel {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.problemTitle {
+  font-size: 20px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.problemClassList {
+  display: grid;
+  gap: 10px;
+}
+
+.problemCodeBlock {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #dbeafe;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  box-shadow: 0 6px 18px rgba(148, 163, 184, 0.08);
+}
+
+.problemDescription {
+  color: #334155;
+  line-height: 1.65;
+}
+
+.bottomPanelHandle {
+  flex: 0 0 8px;
+  background: linear-gradient(180deg, #e5e7eb 0%, #d1d5db 100%);
+  border-left: 1px solid #cbd5e1;
+  border-right: 1px solid #cbd5e1;
 }
 
 .samplePanel {
