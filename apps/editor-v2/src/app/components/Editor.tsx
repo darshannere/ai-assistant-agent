@@ -14,7 +14,7 @@ import GraphComponent from './SMM';
 import { ReactFlowProvider } from '@xyflow/react';
 import { EditorView, ViewPlugin, ViewUpdate, Decoration, WidgetType, GutterMarker, gutter } from "@codemirror/view";
 import { Extension, StateField, EditorState, RangeSetBuilder, Prec } from "@codemirror/state";
-import { search, openSearchPanel, searchKeymap } from '@codemirror/search';
+import { search, openSearchPanel, closeSearchPanel, searchKeymap } from '@codemirror/search';
 import { createPersonalEditorUpdateExtension } from './modals/extension';
 import { BACKEND_URL, WS_URL } from '../config';
 import ParticipantLabel from './ParticipantLabel';
@@ -677,7 +677,7 @@ function createFunctionLineHighlightExtension(
   });
 }
 
-function createPersistentSearchExtension() {
+function createTeamSearchExtension(onPanelVisibilityChange: (isVisible: boolean) => void) {
   return [
     search({ top: true }),
     keymap.of([{
@@ -688,9 +688,13 @@ function createPersistentSearchExtension() {
       },
     }, ...searchKeymap]),
     ViewPlugin.fromClass(class {
+      private lastVisible: boolean | null = null;
+
       update(update: ViewUpdate) {
-        if (!update.view.dom.querySelector('.cm-search')) {
-          openSearchPanel(update.view);
+        const isVisible = Boolean(update.view.dom.querySelector('.cm-search'));
+        if (isVisible !== this.lastVisible) {
+          this.lastVisible = isVisible;
+          onPanelVisibilityChange(isVisible);
         }
       }
     }),
@@ -705,6 +709,7 @@ export default function Editor() {
   const id = localStorage.getItem('participant-id') || 'D';
   const storedUserId = id.replace(/"/g, '');
   const [activeTab, setActiveTab] = useState<string | null>('team');
+  const [teamSearchVisible, setTeamSearchVisible] = useState(true);
   // `?mode=agent` disables CodeMirror features that fight keystroke-based
   // Playwright input (autocomplete, auto-indent, bracket closing). Only the
   // Personal Editor is affected; the Team Editor keeps its full feature set.
@@ -1014,8 +1019,12 @@ export default function Editor() {
 
   useEffect(() => {
     if (activeTab !== 'team' || !teamEditorViewRef.current) return;
-    openSearchPanel(teamEditorViewRef.current);
-  }, [activeTab]);
+    if (teamSearchVisible) {
+      openSearchPanel(teamEditorViewRef.current);
+      return;
+    }
+    closeSearchPanel(teamEditorViewRef.current);
+  }, [activeTab, teamSearchVisible]);
 
   const getParticipantProfile = useCallback((participantId: string) => {
     return participantProfiles[participantId] || { name: participantId, photo: null };
@@ -1109,7 +1118,7 @@ export default function Editor() {
     [testSingleFunction]
   );
   const teamSearchExtensions = useMemo(
-    () => createPersistentSearchExtension(),
+    () => createTeamSearchExtension(setTeamSearchVisible),
     []
   );
 
@@ -1871,6 +1880,14 @@ export default function Editor() {
                           </span>
                         ))}
                       </Group>
+                      <Button
+                        size="compact-xs"
+                        variant="light"
+                        color="gray"
+                        onClick={() => setTeamSearchVisible((prev) => !prev)}
+                      >
+                        {teamSearchVisible ? 'Hide Search' : 'Show Search'}
+                      </Button>
                     </Group>
                     <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0 }}>
                       <CodeMirror
@@ -1881,7 +1898,9 @@ export default function Editor() {
                           leftEditorViewRefs.current.team = view;
                           const activeFn = getFunctionAtPosition(view.state.doc.toString(), view.state.selection.main.head);
                           setSelectedTeamFunction(activeFn?.name || '');
-                          openSearchPanel(view);
+                          if (teamSearchVisible) {
+                            openSearchPanel(view);
+                          }
                         }}
                         extensions={[
                           python(),
