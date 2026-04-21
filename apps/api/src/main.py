@@ -2251,6 +2251,16 @@ def build_starter_code(function_name: str, graph_node: GraphNode) -> str:
     doc_lines = [
         '    """',
         f"    {graph_node.desc}",
+        "",
+        "    Example:",
+        "        Input:",
+        _indent_block(example_input, "            "),
+        "",
+        "        Returns:",
+        _indent_block(example_output, "            "),
+        "",
+        "        Prints:",
+        _indent_block(example_print, "            "),
     ]
 
     if params:
@@ -2261,15 +2271,6 @@ def build_starter_code(function_name: str, graph_node: GraphNode) -> str:
         ])
 
     doc_lines.extend([
-        "",
-        "    Example Input:",
-        _indent_block(example_input),
-        "",
-        "    Example Output:",
-        _indent_block(example_output),
-        "",
-        "    Example Print:",
-        _indent_block(example_print),
         '    """',
         "    pass",
     ])
