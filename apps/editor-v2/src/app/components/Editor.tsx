@@ -792,6 +792,7 @@ export default function Editor() {
   const [helpVariantGroup, setHelpVariantGroup] = useState<HelpVariantGroup | null>(null);
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const [variantPanelOpen, setVariantPanelOpen] = useState(false);
+  const [helperDraftCollapsed, setHelperDraftCollapsed] = useState(false);
   const [shareCommentDraft, setShareCommentDraft] = useState('');
   const [variantCommentDraft, setVariantCommentDraft] = useState('');
 
@@ -2348,6 +2349,59 @@ export default function Editor() {
                       </Group>
                     </div>
                   )}
+                  {helperGuidance && activeHelpAsHelper && (
+                    <div className={styles.helperDraftBanner}>
+                      <Group justify="space-between" align="flex-start" wrap="nowrap" gap="sm">
+                        <div>
+                          <div className={styles.helperDraftTitle}>
+                            Peer-assist draft for {activeHelpAsHelper.helpeeName} ({helperGuidance.concept || 'focused fix'})
+                          </div>
+                          <div className={styles.helperDraftSubtitle}>
+                            Review the full function in your editor, focus on the highlighted lines, then share only when the draft is ready.
+                          </div>
+                        </div>
+                        <Button
+                          size="compact-xs"
+                          variant="subtle"
+                          color="gray"
+                          onClick={() => setHelperDraftCollapsed((prev) => !prev)}
+                        >
+                          {helperDraftCollapsed ? 'Expand' : 'Collapse'}
+                        </Button>
+                      </Group>
+
+                      {!helperDraftCollapsed && !helpVariantGroup && (
+                        <div className={styles.helperDraftComposer}>
+                          <Textarea
+                            size="xs"
+                            minRows={2}
+                            autosize
+                            value={shareCommentDraft}
+                            onChange={(event) => setShareCommentDraft(event.currentTarget.value)}
+                            placeholder={`Comment for ${activeHelpAsHelper.helpeeName}...`}
+                          />
+                          <Group gap="xs" mt={8}>
+                            <Button
+                              size="compact-xs"
+                              color="gray"
+                              variant="light"
+                              onClick={() => { void createManualVariant(); }}
+                            >
+                              Create local variant
+                            </Button>
+                            <Button
+                              size="compact-xs"
+                              color="teal"
+                              variant="light"
+                              onClick={() => { void shareDraftWithHelpee(); }}
+                            >
+                              Share with {activeHelpAsHelper.helpeeName}
+                            </Button>
+                          </Group>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div style={{ flexGrow: 1, overflow: 'auto', minHeight: 0, position: 'relative' }}>
                     <CodeMirror
                       height="100%"
@@ -2369,7 +2423,7 @@ export default function Editor() {
                       style={{ height: '100%' }}
                     />
                     {helpVariantGroup && variantPanelOpen && selectedHelpVariant && (
-                      <div className={styles.variantPanel} style={{ top: helperGuidance && activeHelpAsHelper ? 84 : 8 }}>
+                      <div className={styles.variantPanel} style={{ top: 8 }}>
                         <div className={styles.variantHeader}>
                           <div>
                             <div className={styles.variantTitle}>
@@ -2530,53 +2584,6 @@ export default function Editor() {
                         <div style={{ fontSize: 11, color: '#166534' }}>
                           {helpeeFixHint.focusExplanation || `Review the highlighted ${helpeeFixHint.concept} lines.`}
                         </div>
-                      </div>
-                    )}
-                    {helperGuidance && activeHelpAsHelper && (
-                      <div style={{
-                        position: 'absolute',
-                        top: 8,
-                        left: 8,
-                        right: 8,
-                        background: '#eff6ff',
-                        border: '1px solid #bfdbfe',
-                        borderRadius: 8,
-                        padding: '8px 10px',
-                        zIndex: 12,
-                      }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1d4ed8' }}>
-                          Peer-assist draft for {activeHelpAsHelper.helpeeName} ({helperGuidance.concept || 'focused fix'})
-                        </div>
-                        {!helpVariantGroup && (
-                          <div style={{ marginTop: 8 }}>
-                            <Textarea
-                              size="xs"
-                              minRows={2}
-                              autosize
-                              value={shareCommentDraft}
-                              onChange={(event) => setShareCommentDraft(event.currentTarget.value)}
-                              placeholder={`Comment for ${activeHelpAsHelper.helpeeName}...`}
-                            />
-                            <Group gap="xs" mt={8}>
-                              <Button
-                                size="compact-xs"
-                                color="gray"
-                                variant="light"
-                                onClick={() => { void createManualVariant(); }}
-                              >
-                                Create local variant
-                              </Button>
-                              <Button
-                                size="compact-xs"
-                                color="teal"
-                                variant="light"
-                                onClick={() => { void shareDraftWithHelpee(); }}
-                              >
-                                Share with {activeHelpAsHelper.helpeeName}
-                              </Button>
-                            </Group>
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>

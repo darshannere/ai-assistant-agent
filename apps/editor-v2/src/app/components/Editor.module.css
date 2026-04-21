@@ -85,6 +85,29 @@
   gap: 6px;
 }
 
+.helperDraftBanner {
+  border-bottom: 1px solid #bfdbfe;
+  background: linear-gradient(180deg, #f8fbff 0%, #eef6ff 100%);
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+
+.helperDraftTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.helperDraftSubtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.helperDraftComposer {
+  margin-top: 10px;
+}
+
 .sampleCodeBlock {
   white-space: pre-wrap;
   font-size: 12px;
